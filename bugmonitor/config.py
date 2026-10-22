@@ -19,6 +19,8 @@ class JiraSettings:
     backfill_days: int = 90
     fetch_changelog: bool = True
     retention_days: int = 0        # drop tickets created longer ago than this (0 = keep all)
+    # Tickets assigned to you, any type, for the My Tickets view. Blank disables it.
+    my_jql: str = "assignee = currentUser() AND updated >= -60d"
 
 
 @dataclass
@@ -27,7 +29,8 @@ class AlertSettings:
     priority_raised: bool = True
     reopened: bool = True
     alert_on_first_sync: bool = False
-    assigned_to_me: bool = True      # a bug gets assigned to you
+    assigned_to_me: bool = True      # a ticket gets assigned to you
+    my_status_changes: bool = True   # one of your tickets moves to another status
     # Slack, Teams, and email only fire at or above this priority.
     # Desktop and dashboard alerts fire for everything.
     external_min_priority: str = "Medium"
@@ -62,6 +65,12 @@ class DashboardSettings:
     port: int = 8765
 
 
+# Covers both Jira priority schemes (Highest..Lowest and Blocker..Trivial), most urgent first.
+DEFAULT_PRIORITY_ORDER = ["Blocker", "Highest", "Critical", "High", "Major", "Medium",
+                          "Normal", "Low", "Minor", "Lowest", "Trivial"]
+DEFAULT_HIGH = ["Blocker", "Highest", "Critical", "High", "Major"]
+
+
 @dataclass
 class Settings:
     jira: JiraSettings
@@ -70,14 +79,29 @@ class Settings:
     github: GitHubSettings
     db_path: Path
     priority_order: list[str]
+    high_priorities: list[str] = field(default_factory=lambda: list(DEFAULT_HIGH))
 
-    def priority_rank(self, name: str | None) -> int:
-        """Higher number = more urgent. Unknown priorities rank lowest."""
+    def priority_rank(self, name: str | None) -> float:
+        """Higher number = more urgent, on a 0..len(priority_order) scale.
+        Names missing from the configured order fall back to the built-in order."""
         if not name:
             return 0
+        n, levels = name.lower(), len(self.priority_order)
         order = [p.lower() for p in self.priority_order]
-        n = name.lower()
-        return len(order) - order.index(n) if n in order else 0
+        if n in order:
+            return levels - order.index(n)
+        default = [p.lower() for p in DEFAULT_PRIORITY_ORDER]
+        if n in default:
+            return (len(default) - default.index(n)) / len(default) * levels
+        return 0
+
+    def known_priority(self, name: str | None) -> bool:
+        n = (name or "").lower()
+        return bool(n) and (n in (p.lower() for p in self.priority_order)
+                            or n in (p.lower() for p in DEFAULT_PRIORITY_ORDER))
+
+    def is_high(self, name: str | None) -> bool:
+        return (name or "").lower() in (p.lower() for p in self.high_priorities)
 
 
 def _apply(dc, data: dict):
@@ -113,7 +137,7 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
     if not db.is_absolute():
         db = ROOT / db
 
-    priority_order = raw.get("priority", {}).get(
-        "order", ["Highest", "High", "Medium", "Low", "Lowest"]
-    )
-    return Settings(jira, alerts, dash, gh, db, priority_order)
+    pr = raw.get("priority", {})
+    priority_order = pr.get("order", list(DEFAULT_PRIORITY_ORDER))
+    high = pr.get("high", list(DEFAULT_HIGH))
+    return Settings(jira, alerts, dash, gh, db, priority_order, high)

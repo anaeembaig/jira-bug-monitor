@@ -13,7 +13,7 @@ from bugmonitor.db import connect, set_state
 from bugmonitor.sync import sync_once
 
 NOW = datetime.now(timezone.utc)
-CATS = {"To Do": "new", "In Progress": "indeterminate", "Code Review": "indeterminate",
+CATS = {"To Do": "new", "In Progress": "indeterminate", "Code Review": "indeterminate", "In QA": "indeterminate",
         "Done": "done"}
 
 
@@ -22,26 +22,33 @@ def ts(hours_ago: float) -> str:
 
 
 def issue(key, status="To Do", priority="Medium", created_h=1, updated_h=None, resolved_h=None,
-          assignee="Sam Lee", comps=("Scheduling",), summary="Something broke"):
+          assignee="Sam Lee", comps=("Scheduling",), summary="Something broke", itype="Bug"):
     return {"key": key, "id": key.split("-")[1], "fields": {
         "summary": summary, "status": {"name": status, "statusCategory": {"key": CATS[status]}},
         "priority": {"name": priority} if priority else None,
-        "assignee": {"displayName": assignee} if assignee else None,
+        "assignee": {"displayName": assignee, "accountId": "acc-" + assignee.replace(" ", "")}
+        if assignee else None,
         "reporter": {"displayName": "QA Bot"},
         "created": ts(created_h), "updated": ts(updated_h if updated_h is not None else created_h),
         "resolutiondate": ts(resolved_h) if resolved_h is not None else None,
         "components": [{"name": c} for c in comps], "labels": [],
         "timeoriginalestimate": None, "timespent": None,
-        "project": {"key": key.split("-")[0]}, "issuetype": {"name": "Bug"}}}
+        "project": {"key": key.split("-")[0]}, "issuetype": {"name": itype}}}
 
 
 class FakeJira:
     def __init__(self):
         self.issues, self.logs, self.queries = {}, {}, []
 
+    me = "Ali Naeem"
+
     def search(self, jql):
         self.queries.append(jql)
-        yield from self.issues.values()
+        if "currentUser()" in jql:  # the my-tickets query
+            yield from (i for i in self.issues.values()
+                        if (i["fields"].get("assignee") or {}).get("displayName") == self.me)
+            return
+        yield from (i for i in self.issues.values() if i["fields"]["issuetype"]["name"] == "Bug")
 
     def changelog(self, key):
         yield from self.logs.get(key, [])
@@ -417,3 +424,67 @@ def test_interrupted_unfiltered_first_sync_is_cleaned_up(env):
     assert stats["removed"] == 1 and stats["alerts"] == 0
     h = service.health(conn)
     assert h["jql"] == s.jira.jql and h["in_progress"] is None and h["projects"] == ["HUM"]
+
+
+# ------------------------------------------------------------------ my tickets
+def test_my_tickets_any_type_grouped_with_time_in_status(env):
+    s, conn, jira = env
+    jira.myself = lambda: {"displayName": "Ali Naeem", "accountId": "acc-AliNaeem"}
+    jira.issues["HUM-1"] = issue("HUM-1", "In Progress", assignee="Ali Naeem", created_h=10, updated_h=1)
+    jira.logs["HUM-1"] = [history(1, 6, "To Do", "In Progress")]
+    jira.issues["HUM-2"] = issue("HUM-2", "To Do", assignee="Ali Naeem", itype="Story")
+    jira.issues["HUM-3"] = issue("HUM-3", "Done", assignee="Ali Naeem", created_h=30, updated_h=2, resolved_h=2,
+                                 itype="Task")
+    jira.logs["HUM-3"] = [history(2, 20, "To Do", "In Progress"), history(3, 2, "In Progress", "Done")]
+    jira.issues["HUM-9"] = issue("HUM-9", assignee="Sam Lee")
+    st = sync_once(conn, s, jira)
+    assert st["mine"] == 3 and st["alerts"] == 0               # initial load is quiet
+
+    m = service.my_tickets(conn)
+    assert m["total"] == 3 and m["statuses"] == ["To Do", "In Progress", "Done"]
+    t1 = next(t for g in m["groups"] for t in g["tickets"] if t["key"] == "HUM-1")
+    assert t1["hours_by_status"]["To Do"] == pytest.approx(4, abs=0.05)
+    assert t1["hours_by_status"]["In Progress"] == pytest.approx(6, abs=0.05)
+    assert t1["total_hours"] == pytest.approx(10, abs=0.05)
+    t3 = next(t for g in m["groups"] for t in g["tickets"] if t["key"] == "HUM-3")
+    assert t3["hours_by_status"]["In Progress"] == pytest.approx(18, abs=0.05) and t3["issuetype"] == "Task"
+    # Stories and tasks show under My Tickets but never in the bug views.
+    assert "HUM-2" not in {i["key"] for i in service.list_issues(conn)}
+    assert service.summary(conn)["open"] == 2                  # HUM-1 and HUM-9 bugs
+
+    # Status change on my ticket -> one alert, even though both queries see it.
+    jira.issues["HUM-2"] = issue("HUM-2", "In QA", assignee="Ali Naeem", itype="Story", updated_h=0.1)
+    jira.logs["HUM-2"] = [history(9, 0.1, "To Do", "In QA")]
+    sync_once(conn, s, jira)
+    a = service.list_alerts(conn)
+    assert [x["kind"] for x in a] == ["my_status"] and "To Do → In QA" in a[0]["message"]
+
+    # Newly assigned (non-bug) ticket -> assigned_to_me, sent to Teams regardless of priority.
+    jira.issues["HUM-4"] = issue("HUM-4", assignee="Ali Naeem", itype="Story", priority="Trivial")
+    sync_once(conn, s, jira)
+    assert service.list_alerts(conn)[0]["kind"] == "assigned_to_me"
+
+    # Reassigned away: drops out of My Tickets and, not being a bug, out of the store.
+    jira.issues["HUM-4"] = issue("HUM-4", assignee="Sam Lee", itype="Story", updated_h=0.05)
+    sync_once(conn, s, jira)
+    assert "HUM-4" not in {t["key"] for g in service.my_tickets(conn)["groups"] for t in g["tickets"]}
+    assert conn.execute("SELECT COUNT(*) FROM issues WHERE key='HUM-4'").fetchone()[0] == 0
+
+
+def test_unknown_and_alt_scheme_priorities_reach_teams(env, monkeypatch):
+    s, conn, jira = env
+    s.priority_order = ["Highest", "High", "Medium", "Low", "Lowest"]   # an older config.toml
+    s.alerts.teams_webhook = "https://hooks.example/teams"
+    s.alerts.external_min_priority = "Medium"
+    sent = []
+
+    class R:
+        status_code = 200; text = ""
+
+    monkeypatch.setattr("bugmonitor.alerts.requests.post", lambda url, json, timeout: sent.append(url) or R())
+    al = Alerter(s, conn)
+    al.raise_alert({"key": "A-1", "summary": "x", "priority": "Major", "url": "u"}, "new_bug")
+    al.raise_alert({"key": "A-2", "summary": "x", "priority": "Custom P1", "url": "u"}, "new_bug")
+    al.raise_alert({"key": "A-3", "summary": "x", "priority": "Trivial", "url": "u"}, "new_bug")
+    assert len(sent) == 2                         # Major ranks above Medium; unknown is never dropped
+    assert s.is_high("Major") and not s.is_high("Normal")

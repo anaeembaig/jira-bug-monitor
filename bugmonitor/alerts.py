@@ -21,6 +21,7 @@ TITLES = {
     "priority_raised": "Priority raised",
     "reopened": "Bug reopened",
     "assigned_to_me": "Assigned to you",
+    "my_status": "Your ticket moved",
     "review_requested": "Review requested",
     "checks_failed": "Checks failing",
     "pr_approved": "PR approved",
@@ -72,6 +73,9 @@ class Alerter:
         self.conn = conn
 
     def _external_ok(self, priority: str | None) -> bool:
+        # A priority we can't rank is never silently dropped.
+        if not self.s.known_priority(priority):
+            return True
         return self.s.priority_rank(priority) >= self.s.priority_rank(self.a.external_min_priority)
 
     def raise_alert(self, issue: dict, kind: str, detail: str = "",

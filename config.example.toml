@@ -18,16 +18,20 @@ backfill_days = 90        # first run also loads bugs resolved in this window (u
 fetch_changelog = true    # full status history; needed for accurate fix estimates
 retention_days = 60       # remove tickets from the dashboard once they're older than this
 
+# My Tickets: everything assigned to you (any type), shown by status with time in each status.
+my_jql = 'assignee = currentUser() AND project in (HUMFE, HUM) AND updated >= -60d'
+
 [alerts]
 new_bug = true
 priority_raised = true
 reopened = true
 alert_on_first_sync = false   # don't flood you with every existing bug on day one
-assigned_to_me = true         # a bug gets assigned to you (always sent to Teams)
+assigned_to_me = true         # a ticket gets assigned to you (always sent to Teams)
+my_status_changes = true      # one of your tickets changes status, e.g. In Progress -> In QA (always sent)
 
 # Slack, Teams, and email fire only at or above this priority.
 # Desktop and dashboard alerts fire for everything.
-external_min_priority = "High"
+external_min_priority = "Normal"   # Normal and above go to Teams; Minor/Trivial stay on the dashboard
 
 desktop = true
 
@@ -70,5 +74,8 @@ port = 8765
 db_path = "data/monitor.db"   # relative to this folder
 
 [priority]
-# Highest first. Match the names your Jira uses.
-order = ["Highest", "High", "Medium", "Low", "Lowest"]
+# Most urgent first. Covers both Jira schemes; names not listed fall back to this built-in order.
+order = ["Blocker", "Highest", "Critical", "High", "Major", "Medium", "Normal", "Low", "Minor", "Lowest", "Trivial"]
+# What counts as "high priority" on the dashboard.
+high = ["Blocker", "Highest", "Critical", "High", "Major"]
+["Highest", "High", "Medium", "Low", "Lowest"]

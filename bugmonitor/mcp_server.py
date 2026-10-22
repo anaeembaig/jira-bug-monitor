@@ -106,6 +106,16 @@ def acknowledge_alerts(alert_id: int | None = None) -> dict:
 
 
 @mcp.tool()
+def my_tickets(status: str | None = None) -> dict:
+    """Tickets assigned to you (any type), grouped by status (To Do, In Progress, In QA,
+    Done, ...), each with hours spent in every status and total time. Optional status filter."""
+    m = service.my_tickets(conn)
+    if status:
+        m["groups"] = [g for g in m["groups"] if g["status"].lower() == status.lower()]
+    return m
+
+
+@mcp.tool()
 def bug_trends(days: int = 60) -> dict:
     """60-day picture: weekly created vs resolved, open backlog by day, open bugs by status,
     priority, assignee, and age, plus KPIs like median time to resolve."""

@@ -137,6 +137,19 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .li .t1{font-weight:550;overflow:hidden;text-overflow:ellipsis}
 .li .t2{font-size:12px;color:var(--ink-3);margin-top:2px}
 
+/* ---------- board */
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;padding:16px;overflow-x:auto;align-items:start}
+.col{background:var(--surface-2);border-radius:10px;padding:10px;display:grid;gap:8px;align-content:start}
+.col-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:2px 4px 4px}
+.col-h b{font-size:13px}
+.col-h .sub{font-size:11px}
+.tcard{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer;display:grid;gap:6px}
+.tcard:hover{border-color:var(--line-strong)}
+.tcard .sm{font-size:12px;color:var(--ink-3);display:flex;gap:10px;flex-wrap:wrap}
+.tcard .sum{font-size:13px;line-height:1.35}
+.times{display:flex;gap:6px;flex-wrap:wrap}
+.cat-new{border-top:3px solid var(--neutral)}.cat-indeterminate{border-top:3px solid var(--series-1)}.cat-done{border-top:3px solid var(--good)}
+
 /* ---------- drawer */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .15s;z-index:30}
 .scrim.on{opacity:1;pointer-events:auto}
@@ -163,6 +176,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
     </div><span>Bug Monitor</span></div>
     <nav class="tabs" role="tablist">
       <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
+      <button class="tab" role="tab" data-view="mine">My Tickets <span class="count num" id="c-mine">0</span></button>
       <button class="tab" role="tab" data-view="bugs">Bugs <span class="count num" id="c-bugs">0</span></button>
       <button class="tab" role="tab" data-view="github">GitHub <span class="count num" id="c-gh">0</span></button>
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
@@ -198,6 +212,15 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <div class="card"><div class="card-h"><h3>Open by assignee</h3></div><div class="card-b"><div class="hbars" id="ch-assignee"></div></div></div>
       <div class="card"><div class="card-h"><h3>Needs attention</h3><a href="#" data-goto="bugs">All bugs</a></div><div class="card-b"><div class="list" id="ov-top"></div></div></div>
       <div class="card"><div class="card-h"><h3>Your pull requests</h3><a href="#" data-goto="github">GitHub</a></div><div class="card-b" id="ov-gh"></div></div>
+    </div>
+  </section>
+
+  <!-- ================= MY TICKETS ================= -->
+  <section class="view" id="v-mine">
+    <div class="h-row"><h2>My Tickets</h2><span class="sub" id="mine-sub"></span></div>
+    <div class="card">
+      <div class="toolbar"><div class="seg" id="mine-seg" style="flex-wrap:wrap"></div></div>
+      <div id="mine-body"></div>
     </div>
   </section>
 
@@ -253,9 +276,10 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 /* ---------------------------------------------------------------- helpers */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const PRI = ["highest","high","medium","low","lowest"];
-const PRI_CLS = {highest:"critical",high:"serious",medium:"warning",low:"neutral",lowest:"neutral"};
-const priRank = p => { const i = PRI.indexOf((p||"").toLowerCase()); return i < 0 ? 0 : 5 - i; };
+const PRI = ["blocker","highest","critical","high","major","medium","normal","low","minor","lowest","trivial"];
+const PRI_CLS = {blocker:"critical",highest:"critical",critical:"critical",high:"serious",major:"serious",
+  medium:"warning",normal:"neutral",low:"neutral",minor:"neutral",lowest:"neutral",trivial:"neutral"};
+const priRank = p => { const i = PRI.indexOf((p||"").toLowerCase()); return i < 0 ? 0 : PRI.length - i; };
 const ago = ts => { if (!ts) return ""; const s = (Date.now() - new Date(ts)) / 1000;
   if (s < 60) return "<1m"; if (s < 3600) return Math.round(s/60) + "m"; if (s < 86400) return Math.round(s/3600) + "h";
   return Math.round(s/86400) + "d"; };
@@ -371,7 +395,7 @@ document.addEventListener("mousemove", e => {
 });
 
 /* ---------------------------------------------------------------- state */
-let OV = null, ISSUES = [], GH = {summary: null, prs: [], branches: []};
+let OV = null, ISSUES = [], GH = {summary: null, prs: [], branches: []}, MINE = null, mineView = store.get("bm-mine") || "board";
 let bScope = "open", bSort = {k: "urgency", d: -1}, ghFilter = "mine";
 let view = store.get("bm-view") || "overview";
 
@@ -383,7 +407,7 @@ function renderOverview() {
     ["Open bugs", k.open, `${k.total} tracked in ${OV.days} days`],
     ["New, last 7 days", k.created_7d, ""],
     ["Resolved, last 7 days", k.resolved_7d, ""],
-    ["High priority open", k.high_open, "Highest + High"],
+    ["High priority open", k.high_open, (k.high_names || []).join(" + ") || "none in scope"],
     ["Unassigned", k.unassigned, "open bugs with no owner"],
     ["Median time to fix", k.median_resolve_h == null ? "—" : hrs(k.median_resolve_h), "created to resolved"],
   ];
@@ -414,6 +438,61 @@ function renderOvGitHub() {
       <div><div class="value num" style="font-size:22px;font-weight:650">${s.failing}</div><div class="sub">failing</div></div></div>
     <div class="list">${mine.map(p => `<div class="li"><div class="grow"><div class="t1"><a href="${esc(p.url)}" target="_blank">${esc(p.repo.split("/")[1])}#${p.number}</a> ${esc(p.title)}</div>
       <div class="t2">${prBadge(p.status)}</div></div></div>`).join("") || '<div class="empty">No open PRs</div>'}</div>`;
+}
+
+/* ---------------------------------------------------------------- my tickets */
+function renderMine() {
+  const m = MINE; if (!m) return;
+  $("#mine-sub").innerHTML = `${m.me ? "Assigned to " + esc(m.me) + " · " : ""}${m.total} tickets` +
+    (m.jql ? ` · <span title="${esc(m.jql)}">filter: ${esc(m.jql)}</span>` : "");
+  const segs = [["board", "All · board"], ["table", "All · table"], ...m.groups.map(g => [g.status, `${g.status} ${g.count}`])];
+  if (!segs.some(([v]) => v === mineView)) mineView = "board";
+  $("#mine-seg").innerHTML = segs.map(([v, l]) => `<button data-v="${esc(v)}" aria-pressed="${mineView === v}">${esc(l)}</button>`).join("");
+  const body = $("#mine-body");
+  if (!m.total) { body.innerHTML = '<div class="empty" style="padding:32px">No tickets assigned to you in this window.</div>'; return; }
+  if (mineView === "board") {
+    body.innerHTML = `<div class="board">${m.groups.map(g => `
+      <div class="col cat-${esc(g.category || "new")}">
+        <div class="col-h"><b>${esc(g.status)} <span class="count num">${g.count}</span></b>
+          ${g.category === "done" ? `<span class="sub num" title="Average time from created to done">avg ${hrs(g.avg_cycle_hours)} to finish</span>`
+            : `<span class="sub num" title="Combined time these tickets have spent in ${esc(g.status)}">${hrs(g.total_hours)} total</span>`}</div>
+        ${g.tickets.map(t => mineCard(t)).join("")}
+      </div>`).join("")}</div>`;
+    return;
+  }
+  const tickets = mineView === "table" ? m.groups.flatMap(g => g.tickets) : (m.groups.find(g => g.status === mineView) || {tickets: []}).tickets;
+  const cols = m.statuses.filter(st => tickets.some(t => t.hours_by_status[st] != null));
+  body.innerHTML = `<div class="tw" style="max-height:none"><table><thead><tr>
+      <th class="nosort">Key</th><th class="nosort">Type</th><th class="nosort">Priority</th><th class="nosort">Summary</th>
+      ${mineView === "table" ? '<th class="nosort">Status</th>' : ""}<th class="nosort">In current status</th>
+      ${cols.map(c => `<th class="nosort" title="Time spent in ${esc(c)}">${esc(c)}</th>`).join("")}
+      <th class="nosort">Total</th><th class="nosort">Logged</th><th class="nosort">PR</th></tr></thead><tbody>
+    ${tickets.map(t => `<tr data-open="${esc(t.key)}">
+      <td><a class="key" href="${esc(t.url)}" target="_blank" data-stop>${esc(t.key)}</a></td>
+      <td><span class="chip">${esc(t.issuetype || "")}</span></td>
+      <td>${priBadge(t.priority)}</td>
+      <td class="wrap">${esc(t.summary)}</td>
+      ${mineView === "table" ? `<td><span class="pill">${esc(t.status)}</span></td>` : ""}
+      <td class="num">${t.status_category === "done" ? `<span class="muted">resolved ${ago(t.resolved || t.updated)} ago</span>` : `<b>${hrs(t.in_status_hours)}</b>`}</td>
+      ${cols.map(c => `<td class="num ${t.status === c ? "" : "muted"}">${t.hours_by_status[c] != null ? hrs(t.hours_by_status[c]) : "—"}</td>`).join("")}
+      <td class="num"><b>${hrs(t.total_hours)}</b></td>
+      <td class="num muted">${t.work_minutes ? hrs(t.work_minutes / 60) : "—"}</td>
+      <td>${(t.prs || []).map(p => `<a href="${esc(p.url)}" target="_blank" data-stop>#${p.number}</a> ${prBadge(p.status)}`).join("<br>") || '<span class="muted">—</span>'}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+function mineCard(t) {
+  const steps = Object.entries(t.hours_by_status).map(([k, v]) => `<span class="pill" title="Time in ${esc(k)}">${esc(k)} <b class="num">${hrs(v)}</b></span>`).join("");
+  return `<div class="tcard" data-open="${esc(t.key)}">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+      <a class="key" href="${esc(t.url)}" target="_blank" data-stop>${esc(t.key)}</a><span class="chip">${esc(t.issuetype || "")}</span></div>
+    <div class="sum">${esc(t.summary)}</div>
+    <div class="sm"><span>${priBadge(t.priority)}</span>
+      ${t.status_category === "done" ? `<span>Resolved ${ago(t.resolved || t.updated)} ago</span>` : `<span title="Time in the current status">In status ${hrs(t.in_status_hours)}</span>`}
+      <span title="Created to now, or to resolution">Total ${hrs(t.total_hours)}</span></div>
+    <div class="times">${steps}</div>
+    ${(t.prs || []).length ? `<div>${t.prs.map(p => `<a href="${esc(p.url)}" target="_blank" data-stop>#${p.number}</a> ${prBadge(p.status)}`).join(" ")}</div>` : ""}
+  </div>`;
 }
 
 /* ---------------------------------------------------------------- bugs */
@@ -509,7 +588,7 @@ orgs = ["tcp-software"]      # only PRs in these orgs</pre>
 /* ---------------------------------------------------------------- activity */
 async function renderActivity() {
   const [alerts, active, work] = await Promise.all([j("/api/alerts"), j("/api/active"), j("/api/work?days=7")]);
-  const sev = a => a.kind === "checks_failed" ? "critical" : a.kind === "changes_requested" ? "serious"
+  const sev = a => a.kind === "my_status" || a.kind === "assigned_to_me" ? "neutral" : a.kind === "checks_failed" ? "critical" : a.kind === "changes_requested" ? "serious"
     : a.kind === "pr_approved" || a.kind === "pr_merged" ? "good" : PRI_CLS[(a.priority || "").toLowerCase()] || "neutral";
   $("#alerts").innerHTML = alerts.map(a => `
     <div class="li"><span class="st ${sev(a)}" style="padding-top:2px">${ICON[sev(a)]}</span>
@@ -565,8 +644,9 @@ function closeDrawer() { $("#drawer").classList.remove("on"); $("#scrim").classL
 
 /* ---------------------------------------------------------------- data + nav */
 async function refresh() {
-  const [s, ov, issues, ghs] = await Promise.all([j("/api/summary"), j("/api/overview?days=60"), j("/api/issues?scope=all"), j("/api/github/summary")]);
-  OV = ov; ISSUES = issues; GH.summary = ghs;
+  const [s, ov, issues, ghs, mine] = await Promise.all([j("/api/summary"), j("/api/overview?days=60"), j("/api/issues?scope=all"), j("/api/github/summary"), j("/api/mine")]);
+  OV = ov; ISSUES = issues; GH.summary = ghs; MINE = mine;
+  $("#c-mine").textContent = mine.groups.filter(g => g.category !== "done").reduce((a, g) => a + g.count, 0);
   if (ghs.enabled) { [GH.prs, GH.branches] = await Promise.all([j("/api/github/prs"), j("/api/github/branches")]); }
   $("#c-bugs").textContent = s.open;
   $("#c-gh").textContent = ghs.enabled ? ghs.needs_my_review + ghs.failing : 0;
@@ -580,7 +660,7 @@ async function refresh() {
     : sy.last_sync_finished ? `Synced ${ago(sy.last_sync_finished)} ago` : "Waiting for first sync";
   $("#ov-sub").innerHTML = `Projects: <b>${esc((sy.projects || []).join(", ") || "none yet")}</b> · <span title="${esc(sy.jql || "")}">filter: ${esc(sy.jql || "—")}</span>`;
   el.title = sy.last_sync_error || "";
-  renderOverview(); renderBugs(); renderGitHub();
+  renderOverview(); renderMine(); renderBugs(); renderGitHub();
   if (view === "activity") renderActivity();
 }
 
@@ -603,6 +683,7 @@ document.addEventListener("click", async ev => {
   if (ack) { await j(`/api/alerts/${ack.dataset.ack}/ack`, {method: "POST"}); renderActivity(); return refresh(); }
   const sb = ev.target.closest("#b-scope button");
   if (sb) { bScope = sb.dataset.v; document.querySelectorAll("#b-scope button").forEach(b => b.setAttribute("aria-pressed", b === sb)); return renderBugs(); }
+  const mb = ev.target.closest("#mine-seg button"); if (mb) { mineView = mb.dataset.v; store.set("bm-mine", mineView); return renderMine(); }
   const gb = ev.target.closest("#gh-seg button"); if (gb) { ghFilter = gb.dataset.v; return renderGitHub(); }
   const th = ev.target.closest("#v-bugs th[data-s]");
   if (th) { const k = th.dataset.s; bSort = {k, d: bSort.k === k ? -bSort.d : -1}; return renderBugs(); }

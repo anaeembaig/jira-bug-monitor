@@ -106,7 +106,25 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")       # many readers + one writer
     conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# Columns added after the first release; ALTER them into older databases.
+MIGRATIONS = {
+    "issues": [("issuetype", "TEXT"), ("assignee_id", "TEXT"),
+               ("in_bugs", "INTEGER DEFAULT 1"),   # matches the bug JQL
+               ("in_mine", "INTEGER DEFAULT 0")],  # matches the my-tickets JQL
+}
+
+
+def _migrate(conn) -> None:
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    conn.commit()
 
 
 def get_state(conn, k: str, default=None):

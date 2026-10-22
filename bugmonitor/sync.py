@@ -29,11 +29,13 @@ def map_issue(raw: dict, client: JiraClient) -> dict:
         "key": raw["key"],
         "id": raw.get("id"),
         "project": _name(f.get("project"), "key"),
+        "issuetype": _name(f.get("issuetype")),
         "summary": f.get("summary") or "",
         "status": status.get("name"),
         "status_category": (status.get("statusCategory") or {}).get("key"),
         "priority": _name(f.get("priority")),
         "assignee": _name(f.get("assignee"), "displayName"),
+        "assignee_id": _name(f.get("assignee"), "accountId"),
         "reporter": _name(f.get("reporter"), "displayName"),
         "created": f.get("created"),
         "updated": f.get("updated"),
@@ -46,18 +48,24 @@ def map_issue(raw: dict, client: JiraClient) -> dict:
     }
 
 
-def _upsert(conn, d: dict, first_seen: str | None) -> None:
-    cols = ["key", "id", "project", "summary", "status", "status_category", "priority",
-            "assignee", "reporter", "created", "updated", "resolved", "components", "labels",
-            "original_estimate_sec", "time_spent_sec", "url", "urgency", "reopen_count",
-            "first_seen", "last_synced"]
+UPSERT_COLS = ["key", "id", "project", "issuetype", "summary", "status", "status_category",
+               "priority", "assignee", "assignee_id", "reporter", "created", "updated", "resolved",
+               "components", "labels", "original_estimate_sec", "time_spent_sec", "url", "urgency",
+               "reopen_count", "first_seen", "last_synced", "in_bugs", "in_mine"]
+
+
+def _upsert(conn, d: dict, first_seen: str | None, scope: str) -> None:
+    """Insert or update a ticket. `scope` (bugs | mine) is switched on; the other is kept."""
     vals = dict(d, components=json.dumps(d["components"]), labels=json.dumps(d["labels"]),
-                first_seen=first_seen, last_synced=now_iso())
+                first_seen=first_seen, last_synced=now_iso(),
+                in_bugs=1 if scope == "bugs" else 0, in_mine=1 if scope == "mine" else 0)
+    keep = {"key", "first_seen", "in_bugs", "in_mine"}
     conn.execute(
-        f"INSERT INTO issues({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
+        f"INSERT INTO issues({','.join(UPSERT_COLS)}) VALUES({','.join('?' * len(UPSERT_COLS))}) "
         f"ON CONFLICT(key) DO UPDATE SET "
-        + ",".join(f"{c}=excluded.{c}" for c in cols if c not in ("key", "first_seen")),
-        [vals.get(c) for c in cols],
+        + ",".join(f"{c}=excluded.{c}" for c in UPSERT_COLS if c not in keep)
+        + f", in_{scope}=1",
+        [vals.get(c) for c in UPSERT_COLS],
     )
 
 
@@ -115,18 +123,104 @@ def sync_once(conn, settings: Settings, client: JiraClient, alerter: Alerter | N
         lock.release()
 
 
+class _Ctx:
+    """Shared state for one sync run."""
+
+    def __init__(self, conn, settings, client, alerter, started):
+        self.conn, self.s, self.client, self.alerter, self.started = conn, settings, client, alerter, started
+        self.cats = status_categories(conn)
+        self.me_id, self.me_name = _whoami(conn, client)
+        self.stats = {"seen": 0, "new": 0, "changed": 0, "alerts": 0, "removed": 0,
+                      "first_sync": False, "mine": 0}
+
+    def is_me(self, d: dict | None) -> bool:
+        if not d:
+            return False
+        if self.me_id and d.get("assignee_id"):
+            return d["assignee_id"] == self.me_id
+        return bool(self.me_name) and d.get("assignee") == self.me_name
+
+    def alert(self, d, kind, detail="", external=None):
+        self.alerter.raise_alert(d, kind, detail, external=external)
+        self.stats["alerts"] += 1
+
+
+def _whoami(conn, client) -> tuple[str, str]:
+    me_id, me_name = get_state(conn, "jira_me_id"), get_state(conn, "jira_me")
+    if (me_id is None or me_name is None) and hasattr(client, "myself"):
+        try:
+            me = client.myself()
+            me_id, me_name = me.get("accountId") or "", me.get("displayName") or ""
+            set_state(conn, "jira_me_id", me_id)
+            set_state(conn, "jira_me", me_name)
+        except Exception:
+            pass
+    return me_id or "", me_name or ""
+
+
+def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
+    """Store one ticket from either query and raise any alerts. `quiet` = initial load."""
+    conn, s, a = ctx.conn, ctx.s, ctx.s.alerts
+    d = map_issue(raw, ctx.client)
+    if d["status"] and d["status_category"]:
+        ctx.cats[d["status"]] = d["status_category"]
+    old = row_to_dict(conn.execute("SELECT * FROM issues WHERE key=?", (d["key"],)).fetchone())
+    if old and old["updated"] == d["updated"]:
+        # Unchanged, but make sure it's flagged for this scope.
+        conn.execute(f"UPDATE issues SET in_{scope}=1 WHERE key=?", (d["key"],))
+        return
+
+    # Network first, writes second: never hold the database lock while waiting on Jira.
+    histories = list(ctx.client.changelog(d["key"])) if s.jira.fetch_changelog else []
+    if old is None:
+        ctx.stats["new"] += 1
+        conn.execute(
+            "INSERT OR IGNORE INTO events(key, ts, kind, to_val, author, source, ext_id)"
+            " VALUES(?,?, 'created', ?, ?, 'jira', 'created')",
+            (d["key"], d["created"], d["status"], d["reporter"]))
+    else:
+        ctx.stats["changed"] += 1
+    if s.jira.fetch_changelog:
+        _ingest_changelog(conn, d["key"], histories)
+    elif old:
+        _diff_events(conn, old, d)
+    d["reopen_count"] = _reopen_count(conn, d["key"], ctx.cats)
+    d["urgency"] = urgency_score(d, s)
+    _upsert(conn, d, first_seen=now_iso(), scope=scope)
+    conn.commit()  # release the write lock after each ticket
+
+    if quiet:
+        return
+    open_now = d["status_category"] != "done"
+    if old is None:
+        if scope == "bugs" and a.new_bug and open_now:
+            ctx.alert(d, "new_bug", "assigned to you" if ctx.is_me(d) else "")
+        elif scope == "mine" and a.assigned_to_me and open_now:
+            ctx.alert(d, "assigned_to_me", d.get("issuetype") or "", external=True)
+        return
+    if old.get("in_bugs") and a.priority_raised and \
+            s.priority_rank(d["priority"]) > s.priority_rank(old["priority"]):
+        ctx.alert(d, "priority_raised", f"{old['priority']} → {d['priority']}")
+    if old.get("in_bugs") and a.reopened and old["status_category"] == "done" and open_now:
+        ctx.alert(d, "reopened", f"now {d['status']}")
+    if a.assigned_to_me and ctx.is_me(d) and not ctx.is_me(old) and open_now:
+        ctx.alert(d, "assigned_to_me", f"previously {old['assignee'] or 'unassigned'}", external=True)
+    elif a.my_status_changes and ctx.is_me(d) and old["status"] != d["status"]:
+        ctx.alert(d, "my_status", f"{old['status']} → {d['status']}", external=True)
+
+
 def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter | None) -> dict:
-    alerter = alerter or Alerter(settings, conn)
     started = datetime.now(timezone.utc)
+    ctx = _Ctx(conn, settings, client, alerter or Alerter(settings, conn), started)
+    stats = ctx.stats
     last = get_state(conn, "last_sync_started")
     base = settings.jira.jql
-    # A changed JQL (new projects, new date range) triggers a full re-sync that also
-    # removes tickets no longer in scope. No alerts fire for that re-sync.
-    prev_scope = get_state(conn, "jql_scope")
-    has_rows = conn.execute("SELECT 1 FROM issues LIMIT 1").fetchone() is not None
     # Rows stored under a different (or unknown) JQL get cleaned up after a full re-sync.
+    prev_scope = get_state(conn, "jql_scope")
+    has_rows = conn.execute("SELECT 1 FROM issues WHERE in_bugs=1 LIMIT 1").fetchone() is not None
     scope_changed = has_rows and prev_scope != base
     first_sync = last is None or scope_changed
+    stats["first_sync"] = first_sync
     set_state(conn, "jql_scope_pending", base)
     set_state(conn, "sync_progress", "0")
     conn.commit()
@@ -138,95 +232,55 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
         minutes = int((started - parse_ts(last)).total_seconds() // 60) + 5  # overlap for safety
         jql = f"({base}) AND updated >= -{minutes}m ORDER BY updated ASC"
 
-    me = get_state(conn, "jira_me")
-    if me is None and hasattr(client, "myself"):
-        try:
-            me = client.myself().get("displayName") or ""
-            set_state(conn, "jira_me", me)
-        except Exception:
-            me = ""
-
-    cats = status_categories(conn)
-    stats = {"seen": 0, "new": 0, "changed": 0, "alerts": 0, "first_sync": first_sync,
-             "removed": 0}
-    seen: set[str] = set()
     cutoff = (started - timedelta(days=settings.jira.retention_days)
               if settings.jira.retention_days else None)
+    seen: set[str] = set()
     for raw in client.search(jql):
-        d = map_issue(raw, client)
-        if cutoff and (parse_ts(d["created"]) or started) < cutoff:
+        created = parse_ts((raw.get("fields") or {}).get("created"))
+        if cutoff and (created or started) < cutoff:
             continue  # outside the retention window: never store or alert
         stats["seen"] += 1
-        seen.add(d["key"])
-        if d["status"] and d["status_category"]:
-            cats[d["status"]] = d["status_category"]
-        old = row_to_dict(conn.execute("SELECT * FROM issues WHERE key=?", (d["key"],)).fetchone())
-
-        if old and old["updated"] == d["updated"]:
-            continue  # nothing changed since last time
-
-        # Network first, writes second: never hold the database lock while waiting on Jira.
-        histories = list(client.changelog(d["key"])) if settings.jira.fetch_changelog else []
-
-        if old is None:
-            stats["new"] += 1
-            conn.execute(
-                "INSERT OR IGNORE INTO events(key, ts, kind, to_val, author, source, ext_id)"
-                " VALUES(?,?, 'created', ?, ?, 'jira', 'created')",
-                (d["key"], d["created"], d["status"], d["reporter"]),
-            )
-        else:
-            stats["changed"] += 1
-
-        if settings.jira.fetch_changelog:
-            _ingest_changelog(conn, d["key"], histories)
-        elif old:
-            _diff_events(conn, old, d)
-
-        d["reopen_count"] = _reopen_count(conn, d["key"], cats)
-        d["urgency"] = urgency_score(d, settings)
-        _upsert(conn, d, first_seen=now_iso())
-        conn.commit()  # release the write lock after each ticket
+        seen.add(raw["key"])
+        _process(ctx, raw, "bugs", quiet=first_sync and not settings.alerts.alert_on_first_sync)
         if stats["seen"] % 25 == 0:
             set_state(conn, "sync_progress", str(stats["seen"]))
             conn.commit()
             log.info("Synced %s tickets so far...", stats["seen"])
 
-        # ---- alert rules
-        a = settings.alerts
-        if old is None:
-            if (a.new_bug and d["status_category"] != "done"
-                    and (not first_sync or a.alert_on_first_sync)):
-                alerter.raise_alert(d, "new_bug"); stats["alerts"] += 1
-        else:
-            if (a.priority_raised and
-                    settings.priority_rank(d["priority"]) > settings.priority_rank(old["priority"])):
-                alerter.raise_alert(d, "priority_raised",
-                                    f"{old['priority']} → {d['priority']}"); stats["alerts"] += 1
-            if (a.reopened and old["status_category"] == "done"
-                    and d["status_category"] != "done"):
-                alerter.raise_alert(d, "reopened", f"now {d['status']}"); stats["alerts"] += 1
-            if (a.assigned_to_me and me and d["assignee"] == me and old["assignee"] != me
-                    and d["status_category"] != "done" and not first_sync):
-                # Always worth a ping, whatever the priority.
-                alerter.raise_alert(d, "assigned_to_me", f"previously {old['assignee'] or 'unassigned'}",
-                                    external=True); stats["alerts"] += 1
+    # ---- my tickets: small set, so re-read in full every time
+    my_jql = settings.jira.my_jql.strip()
+    if my_jql:
+        mine_first = get_state(conn, "my_jql_scope") != my_jql
+        mine_seen: set[str] = set()
+        for raw in client.search(f"({my_jql}) ORDER BY updated DESC"):
+            mine_seen.add(raw["key"])
+            _process(ctx, raw, "mine", quiet=mine_first)
+        for r in conn.execute("SELECT key FROM issues WHERE in_mine=1").fetchall():
+            if r["key"] not in mine_seen:
+                conn.execute("UPDATE issues SET in_mine=0 WHERE key=?", (r["key"],))
+        stats["mine"] = len(mine_seen)
+        set_state(conn, "my_jql_scope", my_jql)
+    else:
+        conn.execute("UPDATE issues SET in_mine=0")
 
-    # ---- keep the store in scope
+    # ---- keep the store in scope (your own tickets are kept while they're yours)
     if scope_changed:
-        stale = [r["key"] for r in conn.execute("SELECT key FROM issues") if r["key"] not in seen]
-        stats["removed"] += _forget(conn, stale)
+        for r in conn.execute("SELECT key FROM issues WHERE in_bugs=1").fetchall():
+            if r["key"] not in seen:
+                conn.execute("UPDATE issues SET in_bugs=0 WHERE key=?", (r["key"],))
     if cutoff:
-        old_keys = [r["key"] for r in conn.execute("SELECT key, created FROM issues")
-                    if (parse_ts(r["created"]) or started) < cutoff]
-        stats["removed"] += _forget(conn, old_keys)
+        for r in conn.execute("SELECT key, created FROM issues WHERE in_bugs=1").fetchall():
+            if (parse_ts(r["created"]) or started) < cutoff:
+                conn.execute("UPDATE issues SET in_bugs=0 WHERE key=?", (r["key"],))
+    orphans = [r["key"] for r in conn.execute("SELECT key FROM issues WHERE in_bugs=0 AND in_mine=0")]
+    stats["removed"] += _forget(conn, orphans)
 
-    # Age changes urgency even when Jira doesn't, so re-score every open bug.
+    # Age changes urgency even when Jira doesn't, so re-score every open ticket.
     for row in conn.execute("SELECT * FROM issues WHERE status_category != 'done'").fetchall():
         d = row_to_dict(row)
         conn.execute("UPDATE issues SET urgency=? WHERE key=?", (urgency_score(d, settings), d["key"]))
 
-    set_state(conn, "status_categories", json.dumps(cats))
+    set_state(conn, "status_categories", json.dumps(ctx.cats))
     set_state(conn, "last_sync_started", started.isoformat())
     set_state(conn, "last_sync_finished", now_iso())
     set_state(conn, "last_sync_stats", json.dumps(stats))

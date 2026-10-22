@@ -59,6 +59,8 @@ def make_handler(settings: Settings):
                     return self._json(service.summary(conn))
                 if u.path == "/api/overview":
                     return self._json(service.overview(conn, settings, int(q.get("days", 60))))
+                if u.path == "/api/mine":
+                    return self._json(service.my_tickets(conn))
                 if u.path == "/api/issues":
                     return self._json(service.list_issues(conn, q.get("scope", "all")))
                 if u.path == "/api/github/summary":

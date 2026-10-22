@@ -25,7 +25,7 @@ def health(conn) -> dict:
         "jql": get_state(conn, "jql_scope_pending") or get_state(conn, "jql_scope"),
         "in_progress": get_state(conn, "sync_progress") or None,
         "projects": [r[0] for r in conn.execute(
-            "SELECT project FROM issues GROUP BY project ORDER BY COUNT(*) DESC")],
+            "SELECT project FROM issues WHERE in_bugs=1 GROUP BY project ORDER BY COUNT(*) DESC")],
     }
 
 
@@ -33,21 +33,21 @@ def summary(conn) -> dict:
     q = lambda sql, *a: [dict(r) for r in conn.execute(sql, a).fetchall()]
     new_24h = len(list_new(conn, hours=24, limit=10_000))
     return {
-        "open": conn.execute("SELECT COUNT(*) FROM issues WHERE status_category!='done'").fetchone()[0],
+        "open": conn.execute("SELECT COUNT(*) FROM issues WHERE in_bugs=1 AND status_category!='done'").fetchone()[0],
         "new_last_24h": new_24h,
         "unassigned_open": conn.execute(
-            "SELECT COUNT(*) FROM issues WHERE status_category!='done' AND assignee IS NULL").fetchone()[0],
+            "SELECT COUNT(*) FROM issues WHERE in_bugs=1 AND status_category!='done' AND assignee IS NULL").fetchone()[0],
         "resolved_last_7d": sum(
-            1 for r in conn.execute("SELECT resolved FROM issues WHERE status_category='done'")
+            1 for r in conn.execute("SELECT resolved FROM issues WHERE in_bugs=1 AND status_category='done'")
             if (parse_ts(r["resolved"]) or datetime.min.replace(tzinfo=timezone.utc))
             >= datetime.now(timezone.utc) - timedelta(days=7)),
         "unread_alerts": conn.execute(
             "SELECT COUNT(*) FROM alerts WHERE acknowledged=0").fetchone()[0],
         "open_by_priority": q("SELECT COALESCE(priority,'None') AS priority, COUNT(*) AS n FROM issues "
-                              "WHERE status_category!='done' GROUP BY 1 ORDER BY n DESC"),
-        "open_by_status": q("SELECT status, COUNT(*) AS n FROM issues WHERE status_category!='done' "
+                              "WHERE in_bugs=1 AND status_category!='done' GROUP BY 1 ORDER BY n DESC"),
+        "open_by_status": q("SELECT status, COUNT(*) AS n FROM issues WHERE in_bugs=1 AND status_category!='done' "
                             "GROUP BY 1 ORDER BY n DESC"),
-        "open_by_project": q("SELECT project, COUNT(*) AS n FROM issues WHERE status_category!='done' "
+        "open_by_project": q("SELECT project, COUNT(*) AS n FROM issues WHERE in_bugs=1 AND status_category!='done' "
                              "GROUP BY 1 ORDER BY n DESC"),
         "sync": health(conn),
     }
@@ -55,7 +55,7 @@ def summary(conn) -> dict:
 
 def list_open(conn, project=None, assignee=None, priority=None, status=None,
               unassigned_only=False, limit=50) -> list[dict]:
-    sql = f"SELECT {OPEN_FIELDS} FROM issues WHERE status_category != 'done'"
+    sql = f"SELECT {OPEN_FIELDS} FROM issues WHERE in_bugs=1 AND status_category != 'done'"
     args: list = []
     if project:
         sql += " AND project = ?"; args.append(project.upper())
@@ -73,7 +73,7 @@ def list_open(conn, project=None, assignee=None, priority=None, status=None,
 
 def list_new(conn, hours: float = 24, limit: int = 100) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    rows = conn.execute(f"SELECT {OPEN_FIELDS} FROM issues ORDER BY created DESC").fetchall()
+    rows = conn.execute(f"SELECT {OPEN_FIELDS} FROM issues WHERE in_bugs=1 ORDER BY created DESC").fetchall()
     out = [row_to_dict(r) for r in rows if (parse_ts(r["created"]) or cutoff) > cutoff]
     return out[:limit]
 
@@ -214,7 +214,7 @@ def list_issues(conn, scope: str = "all", limit: int = 2000) -> list[dict]:
     """Every tracked bug (open, resolved, or all), most urgent first, with linked PRs."""
     where = {"open": "status_category != 'done'", "resolved": "status_category = 'done'"}.get(scope, "1=1")
     rows = [row_to_dict(r) for r in conn.execute(
-        f"SELECT {OPEN_FIELDS}, resolved, reporter FROM issues WHERE {where} "
+        f"SELECT {OPEN_FIELDS}, resolved, reporter FROM issues WHERE in_bugs=1 AND {where} "
         "ORDER BY status_category = 'done', urgency DESC, created DESC LIMIT ?", (int(limit),))]
     links = pr_links(conn)
     for r in rows:
@@ -226,7 +226,7 @@ def overview(conn, settings=None, days: int = 60) -> dict:
     now = datetime.now(timezone.utc).astimezone()
     start = (now - timedelta(days=days - 1)).date()
     issues = [row_to_dict(r) for r in conn.execute(
-        "SELECT key, status, status_category, priority, assignee, project, created, resolved FROM issues")]
+        "SELECT key, status, status_category, priority, assignee, project, created, resolved FROM issues WHERE in_bugs=1")]
 
     # weekly created vs resolved (weeks start Monday)
     def week(d):
@@ -283,7 +283,7 @@ def overview(conn, settings=None, days: int = 60) -> dict:
     res_hours.sort()
     median_h = res_hours[len(res_hours) // 2] if res_hours else None
 
-    prio_order = settings.priority_order if settings else ["Highest", "High", "Medium", "Low", "Lowest"]
+    prio_order = settings.priority_order if settings else []
     seven = now - timedelta(days=7)
     return {
         "days": days,
@@ -293,7 +293,9 @@ def overview(conn, settings=None, days: int = 60) -> dict:
             "resolved_7d": sum(1 for i in issues if i["status_category"] == "done"
                                and (r := _local(i["resolved"])) and r >= seven),
             "unassigned": sum(1 for i in open_i if not i["assignee"]),
-            "high_open": sum(1 for i in open_i if (i["priority"] or "") in prio_order[:2]),
+            "high_open": sum(1 for i in open_i if settings and settings.is_high(i["priority"])),
+            "high_names": [p for p in (settings.high_priorities if settings else [])
+                           if any((i["priority"] or "").lower() == p.lower() for i in issues)],
             "median_resolve_h": round(median_h, 1) if median_h is not None else None,
             "total": len(issues),
         },
@@ -301,7 +303,8 @@ def overview(conn, settings=None, days: int = 60) -> dict:
                     "resolved": resolved_w.get(w, 0)} for w in weeks],
         "backlog": backlog,
         "by_status": count(open_i, "status"),
-        "by_priority": count(open_i, "priority", order=prio_order),
+        "by_priority": sorted(count(open_i, "priority"),
+                              key=lambda d: -(settings.priority_rank(d["label"]) if settings else 0)),
         "by_assignee": count(open_i, "assignee", top=8),
         "by_project": count(issues, "project"),
         "aging": aging,
@@ -350,3 +353,54 @@ def github_summary(conn) -> dict:
         "branches": conn.execute("SELECT COUNT(*) FROM github_branches").fetchone()[0],
         "my_open_by_status": [{"label": k, "n": v} for k, v in sorted(by_status.items(), key=lambda kv: -kv[1])],
     }
+
+
+# =========================================================================== my tickets
+STATUS_ORDER = ["open", "reopened", "backlog", "to do", "selected for development", "ready",
+                "in progress", "in development", "blocked", "code review", "in review", "review",
+                "ready for qa", "in qa", "qa", "testing", "ready for release", "done", "closed", "resolved"]
+CAT_ORDER = {"new": 0, "indeterminate": 1, "done": 2}
+
+
+def _status_sort(name: str, cat: str | None) -> tuple:
+    n = (name or "").lower()
+    return (CAT_ORDER.get(cat or "", 1), STATUS_ORDER.index(n) if n in STATUS_ORDER else 50, n)
+
+
+def my_tickets(conn) -> dict:
+    """Tickets assigned to you, grouped by status, with time spent in every status."""
+    from .analytics import status_durations
+    rows = [row_to_dict(r) for r in conn.execute(
+        "SELECT key, summary, status, status_category, priority, issuetype, project, assignee, "
+        "created, updated, resolved, url, urgency, reopen_count FROM issues WHERE in_mine=1")]
+    now = datetime.now(timezone.utc)
+    links = pr_links(conn)
+    for r in rows:
+        d = status_durations(conn, r["key"])
+        r["hours_by_status"] = {k: round(v / 3600, 2) for k, v in d["by_status"].items()}
+        r["total_hours"] = round(sum(d["by_status"].values()) / 3600, 2)
+        r["active_hours"] = round(d["active_sec"] / 3600, 2)
+        r["in_status_hours"] = (None if r["status_category"] == "done"
+                                else round(_time_in_current(conn, r, now) / 3600, 2))
+        r["work_minutes"] = work_minutes(conn, r["key"])
+        r["prs"] = links.get(r["key"], [])
+    cats = {r["status"]: r["status_category"] for r in rows}
+    statuses = sorted(cats, key=lambda s: _status_sort(s, cats[s]))
+    groups = []
+    for st in statuses:
+        items = sorted((r for r in rows if r["status"] == st), key=lambda r: -(r["urgency"] or 0))
+        g = {"status": st, "category": cats[st], "count": len(items), "tickets": items,
+             "total_hours": round(sum(i["in_status_hours"] or 0 for i in items), 2)}
+        if cats[st] == "done" and items:
+            g["avg_cycle_hours"] = round(sum(i["total_hours"] for i in items) / len(items), 2)
+        groups.append(g)
+    return {"total": len(rows), "statuses": statuses, "groups": groups,
+            "me": get_state(conn, "jira_me"), "jql": get_state(conn, "my_jql_scope")}
+
+
+def _time_in_current(conn, r: dict, now: datetime) -> float:
+    last = conn.execute("SELECT ts FROM events WHERE key=? AND kind='status' ORDER BY ts DESC LIMIT 1",
+                        (r["key"],)).fetchone()
+    since = parse_ts(last["ts"]) if last else parse_ts(r["created"])
+    end = parse_ts(r["resolved"]) if r["status_category"] == "done" and r["resolved"] else now
+    return max(((end or now) - (since or now)).total_seconds(), 0)

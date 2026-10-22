@@ -6,6 +6,7 @@ A local app that watches Jira bugs and your GitHub pull requests, alerts you whe
 
 - **New bug alerts** on the dashboard, desktop pop-ups, Slack, Teams, and email
 - **Dashboard** with four tabs:
+  - **My Tickets:** everything assigned to you, any type, as a board with all statuses side by side, a full table, or one tab per status (To Do, In Progress, In QA, Done, and so on). Each ticket shows time spent in every status and the total
   - **Overview:** KPIs and charts for the last 60 days, including weekly created vs. resolved, open bugs over time, and open bugs by priority, status, assignee, and age
   - **Bugs:** every tracked bug, open or resolved, sorted by an urgency score from 0 to 100
   - **GitHub:** your pull requests and branches with live review and CI status
@@ -71,13 +72,14 @@ Alerts fire for these events:
 | A new bug appears | At or above `external_min_priority` (default High) |
 | A bug's priority goes up | At or above `external_min_priority` |
 | A resolved bug is reopened | At or above `external_min_priority` |
-| A bug is assigned to you | Always |
+| A ticket is assigned to you | Always |
+| One of your tickets changes status | Always |
 | Someone requests your review on a PR | When `alerts_to_external = true` |
 | Checks start failing on your PR | When `alerts_to_external = true` |
 | Your PR is approved or gets changes requested | When `alerts_to_external = true` |
 | Your PR is merged | When `alerts_to_external = true` |
 
-The dashboard and desktop pop-ups get every alert.
+The dashboard and desktop pop-ups get every alert. Priorities from both Jira schemes are supported (Highest to Lowest, and Blocker to Trivial). A priority the monitor doesn't recognize is always sent, never dropped.
 
 ## Connect GitHub
 
@@ -108,6 +110,7 @@ Ask in plain language from any session:
 - "How long will HUM-409 take to fix?"
 - "I'm starting on HUM-412." Then later: "Done with HUM-412. Fixed the null check."
 - "What did I work on this week?"
+- "Which of my tickets are in QA, and how long have they been there?"
 - "Which of my PRs are failing checks?" or "What's waiting on my review?"
 - "How did bug intake compare to fixes over the last 60 days?"
 
@@ -124,6 +127,7 @@ Ask in plain language from any session:
 | `active_work` | Shows tickets someone is working on now, from any session |
 | `work_report` | Shows time logged per ticket |
 | `list_alerts` and `acknowledge_alerts` | Shows the alert inbox and marks alerts as read |
+| `my_tickets` | Lists your tickets by status, with time in each status and the total |
 | `bug_trends` | Shows 60-day trends, breakdowns, and KPIs |
 | `my_pull_requests` | Lists your PRs with status, checks, review state, and linked Jira keys |
 | `my_branches` | Lists your recent branches with CI status and linked PR |
