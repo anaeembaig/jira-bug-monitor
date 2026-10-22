@@ -255,3 +255,150 @@ def test_scope_change_and_retention_prune_old_tickets(env):
     jira.issues["HUMFE-3"] = issue("HUMFE-3")
     stats = sync_once(conn, s, jira)
     assert not stats["first_sync"] and stats["alerts"] == 1
+
+
+# ------------------------------------------------------------------ GitHub
+def gh_pr(num, title, head, author="anaeem", state="OPEN", review=None, checks="SUCCESS",
+          requested=(), draft=False, repo="tcp-software/web-schedule"):
+    return {"id": f"PR_{num}", "number": num, "title": title, "url": f"https://github.com/{repo}/pull/{num}",
+            "state": state, "isDraft": draft, "createdAt": ts(30), "updatedAt": ts(1),
+            "mergedAt": ts(1) if state == "MERGED" else None, "closedAt": None,
+            "headRefName": head, "baseRefName": "main", "reviewDecision": review, "mergeable": "MERGEABLE",
+            "additions": 10, "deletions": 2, "repository": {"nameWithOwner": repo},
+            "author": {"login": author}, "assignees": {"nodes": []},
+            "reviewRequests": {"nodes": [{"requestedReviewer": {"login": r}} for r in requested]},
+            "latestReviews": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks} if checks else None}}]}}
+
+
+class FakeGitHub:
+    def __init__(self):
+        self.prs = {}
+        self.refs = {}
+
+    def viewer(self):
+        return "anaeem"
+
+    def search_prs(self, q):
+        if "review-requested" in q:
+            return [p for p in self.prs.values() if any(
+                r["requestedReviewer"]["login"] == "anaeem" for r in p["reviewRequests"]["nodes"])]
+        if "reviewed-by" in q:
+            return []
+        return list(self.prs.values())
+
+    def branches(self, repo):
+        return {"defaultBranchRef": {"name": "main"}, "refs": {"nodes": self.refs.get(repo, [])}}
+
+
+def gh_ref(name, login="anaeem", hours=2, pr=None):
+    return {"name": name, "target": {"oid": "abc1234567890", "committedDate": ts(hours),
+            "messageHeadline": "wip", "author": {"user": {"login": login}},
+            "statusCheckRollup": {"state": "SUCCESS"}},
+            "associatedPullRequests": {"nodes": [pr] if pr else []}}
+
+
+def test_github_sync_links_statuses_and_alerts(env):
+    from bugmonitor.github_sync import sync_github
+    s, conn, jira = env
+    s.github.enabled = True
+    jira.issues["HUMFE-4233"] = issue("HUMFE-4233")
+    sync_once(conn, s, jira)
+
+    gh = FakeGitHub()
+    gh.prs["a"] = gh_pr(2520, "HUMFE-4233 fix overtime rounding", "humfe-4233-overtime")
+    gh.prs["b"] = gh_pr(811, "Refactor grid", "grid", author="teammate", requested=["anaeem"],
+                        repo="tcp-software/web-ui")
+    gh.refs["tcp-software/web-schedule"] = [
+        gh_ref("main"), gh_ref("humfe-4233-overtime", pr={"number": 2520, "state": "OPEN", "url": "u"}),
+        gh_ref("someone-elses", login="teammate"), gh_ref("ancient", hours=24 * 90)]
+    st = sync_github(conn, s, gh)
+    assert st == {"prs": 2, "branches": 1, "alerts": 0}           # first sync: no alert flood
+
+    prs = {p["number"]: p for p in service.list_prs(conn)}
+    assert prs[2520]["jira_keys"] == ["HUMFE-4233"]
+    assert prs[2520]["status"] == "Awaiting review"
+    assert prs[811]["relations"] == ["review_requested"]
+    t = service.get_ticket(conn, "HUMFE-4233")
+    assert t["prs"][0]["number"] == 2520 and t["branches"][0]["name"] == "humfe-4233-overtime"
+    assert service.list_issues(conn)[0]["prs"][0]["number"] == 2520
+
+    # Changes: my PR's checks fail, then a new review request arrives.
+    gh.prs["a"] = gh_pr(2520, "HUMFE-4233 fix overtime rounding", "humfe-4233-overtime", checks="FAILURE")
+    gh.prs["c"] = gh_pr(900, "Hotfix", "hotfix", author="lead", requested=["anaeem"])
+    st = sync_github(conn, s, gh)
+    kinds = sorted(a["kind"] for a in service.list_alerts(conn))
+    assert kinds == ["checks_failed", "review_requested"]
+    assert service.github_summary(conn)["failing"] == 1
+    assert service.github_summary(conn)["needs_my_review"] == 2
+
+    gh.prs["a"] = gh_pr(2520, "HUMFE-4233 fix overtime rounding", "humfe-4233-overtime",
+                        state="MERGED", review="APPROVED")
+    sync_github(conn, s, gh)
+    assert {a["kind"] for a in service.list_alerts(conn)} >= {"pr_approved", "pr_merged"}
+
+
+def test_pr_status_labels():
+    from bugmonitor.github_sync import pr_status
+    base = {"state": "OPEN", "is_draft": 0, "review_decision": None, "checks": "SUCCESS"}
+    assert pr_status(base) == "Awaiting review"
+    assert pr_status(dict(base, is_draft=1)) == "Draft"
+    assert pr_status(dict(base, checks="FAILURE")) == "Checks failing"
+    assert pr_status(dict(base, review_decision="APPROVED")) == "Ready to merge"
+    assert pr_status(dict(base, review_decision="APPROVED", checks="PENDING")) == "Approved"
+    assert pr_status(dict(base, review_decision="CHANGES_REQUESTED")) == "Changes requested"
+    assert pr_status(dict(base, state="MERGED")) == "Merged"
+
+
+def test_jira_key_extraction():
+    from bugmonitor.github_sync import jira_keys
+    assert jira_keys("humfe-4233-fix HUM-12 and UTF-8", {"HUMFE", "HUM"}) == ["HUMFE-4233", "HUM-12"]
+    assert jira_keys("feature/HUMFE-1_x", set()) == ["HUMFE-1"]
+
+
+def test_assigned_to_me_alert(env):
+    s, conn, jira = env
+    jira.myself = lambda: {"displayName": "Ali Naeem"}
+    jira.issues["HUM-5"] = issue("HUM-5", assignee=None, priority="Low")
+    sync_once(conn, s, jira)
+    jira.issues["HUM-5"] = issue("HUM-5", assignee="Ali Naeem", priority="Low", updated_h=0.1)
+    sync_once(conn, s, jira)
+    a = service.list_alerts(conn)
+    assert a[0]["kind"] == "assigned_to_me"
+
+
+def test_overview_shapes(env):
+    s, conn, jira = env
+    seed_history(jira)
+    jira.issues["HUM-1"] = issue("HUM-1", priority="High", assignee=None)
+    jira.issues["HUM-2"] = issue("HUM-2", created_h=24 * 10)
+    sync_once(conn, s, jira)
+    o = service.overview(conn, s)
+    assert o["kpis"]["open"] == 2 and o["kpis"]["unassigned"] == 1 and o["kpis"]["high_open"] == 1
+    assert len(o["backlog"]) == 60 and o["backlog"][-1]["open"] == 2
+    assert sum(w["created"] for w in o["weekly"]) == 8 and sum(w["resolved"] for w in o["weekly"]) == 6
+    assert [b["label"] for b in o["by_priority"]][:2] == ["High", "Medium"]
+    assert sum(b["n"] for b in o["aging"]) == 2
+    assert {i["key"] for i in service.list_issues(conn, "resolved")} == {f"HUM-{100+i}" for i in range(6)}
+
+
+def test_github_client_paginates_and_reports_sso(monkeypatch):
+    from bugmonitor.github_client import GitHubClient, GitHubError
+    pages = [{"data": {"search": {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [{"id": 1}]}}},
+             {"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [{"id": 2}, {}]}}}]
+    sent = []
+
+    class R:
+        def __init__(self, d, code=200): self.d, self.status_code, self.ok, self.text = d, code, code < 400, ""
+        def json(self): return self.d
+
+    c = GitHubClient("tok")
+    monkeypatch.setattr(c.s, "post", lambda url, json, timeout: sent.append(json) or R(pages.pop(0)))
+    assert [n["id"] for n in c.search_prs("is:pr involves:me")] == [1, 2]
+    assert sent[1]["variables"]["after"] == "c1"
+    assert c.s.headers["Authorization"] == "Bearer tok"
+
+    monkeypatch.setattr(c.s, "post", lambda url, json, timeout: R(
+        {"errors": [{"message": "Resource protected by organization SAML enforcement."}]}))
+    with pytest.raises(GitHubError, match="authorize the token"):
+        c.viewer()

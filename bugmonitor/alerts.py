@@ -20,6 +20,12 @@ TITLES = {
     "new_bug": "New bug",
     "priority_raised": "Priority raised",
     "reopened": "Bug reopened",
+    "assigned_to_me": "Assigned to you",
+    "review_requested": "Review requested",
+    "checks_failed": "Checks failing",
+    "pr_approved": "PR approved",
+    "changes_requested": "Changes requested",
+    "pr_merged": "PR merged",
 }
 
 
@@ -68,8 +74,11 @@ class Alerter:
     def _external_ok(self, priority: str | None) -> bool:
         return self.s.priority_rank(priority) >= self.s.priority_rank(self.a.external_min_priority)
 
-    def raise_alert(self, issue: dict, kind: str, detail: str = "") -> int:
-        title = f"{TITLES.get(kind, kind)}: {issue['key']} ({issue.get('priority') or 'No priority'})"
+    def raise_alert(self, issue: dict, kind: str, detail: str = "",
+                    external: bool | None = None) -> int:
+        """external=None: Teams/Slack/email only at or above external_min_priority."""
+        pri = f" ({issue['priority']})" if issue.get("priority") else ""
+        title = f"{TITLES.get(kind, kind)}: {issue['key']}{pri}"
         body = issue.get("summary", "")
         if detail:
             body = f"{detail} — {body}"
@@ -78,7 +87,7 @@ class Alerter:
 
         if self.a.desktop and desktop_notify(title, body):
             channels.append("desktop")
-        if self._external_ok(issue.get("priority")):
+        if external if external is not None else self._external_ok(issue.get("priority")):
             if self.a.slack_webhook and self._slack(title, body, issue):
                 channels.append("slack")
             if self.a.teams_webhook and self._teams(title, body, issue):

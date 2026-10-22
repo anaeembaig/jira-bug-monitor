@@ -1,6 +1,7 @@
 config.toml
 data/
-.venv/
 __pycache__/
+.venv/
 *.pyc
 .DS_Store
+*.zip

@@ -106,13 +106,43 @@ def acknowledge_alerts(alert_id: int | None = None) -> dict:
 
 
 @mcp.tool()
+def bug_trends(days: int = 60) -> dict:
+    """60-day picture: weekly created vs resolved, open backlog by day, open bugs by status,
+    priority, assignee, and age, plus KPIs like median time to resolve."""
+    return service.overview(conn, settings, days)
+
+
+@mcp.tool()
+def my_pull_requests(relation: str | None = None, state: str | None = None) -> list[dict]:
+    """Your GitHub PRs from the last 60 days with live status (review decision, CI checks)
+    and linked Jira keys. relation: authored | review_requested | reviewed | assigned.
+    state: OPEN | MERGED | CLOSED."""
+    return service.list_prs(conn, relation, state)
+
+
+@mcp.tool()
+def my_branches() -> list[dict]:
+    """Your recent branches with latest commit, CI status, linked PR, and Jira keys."""
+    return service.list_branches(conn)
+
+
+@mcp.tool()
+def github_summary() -> dict:
+    """Counts: your open PRs by status, PRs waiting on your review, failing checks."""
+    return service.github_summary(conn)
+
+
+@mcp.tool()
 def sync_now() -> dict:
-    """Pull the latest changes from Jira right now instead of waiting for the next poll."""
+    """Pull the latest from Jira (and GitHub, if enabled) right now."""
+    from .sync import sync_github_safe
     try:
         client = JiraClient(settings.jira.base_url, settings.jira.email, settings.jira.api_token)
-        return sync_once(conn, settings, client, Alerter(settings, conn))
+        out = {"jira": sync_once(conn, settings, client, Alerter(settings, conn))}
     except JiraError as e:
-        return {"error": str(e)}
+        out = {"jira": {"error": str(e)}}
+    out["github"] = sync_github_safe(conn, settings)
+    return out
 
 
 def main() -> None:

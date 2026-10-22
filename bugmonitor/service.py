@@ -98,6 +98,10 @@ def get_ticket(conn, key: str) -> dict:
     issue["local_work_minutes"] = work_minutes(conn, key)
     issue["timeline"] = timeline(conn, key)
     issue["estimate"] = estimate_fix(conn, key)
+    issue["prs"] = pr_links(conn).get(key, [])
+    issue["branches"] = [row_to_dict(r) for r in conn.execute(
+        "SELECT repo, name, url, checks, pr_number, pr_state, committed FROM github_branches "
+        "WHERE jira_keys LIKE ?", (f'%"{key}"%',))]
     issue["alerts"] = [dict(r) for r in conn.execute(
         "SELECT id, ts, kind, message, acknowledged FROM alerts WHERE key=? ORDER BY ts DESC", (key,))]
     return issue
@@ -194,3 +198,151 @@ def ack_alerts(conn, alert_id: int | None = None) -> dict:
         n = conn.execute("UPDATE alerts SET acknowledged=1 WHERE id=?", (int(alert_id),)).rowcount
     conn.commit()
     return {"acknowledged": n}
+
+
+# =========================================================================== 60-day analytics
+def _local(ts):
+    t = parse_ts(ts)
+    return t.astimezone() if t else None
+
+
+def list_issues(conn, scope: str = "all", limit: int = 2000) -> list[dict]:
+    """Every tracked bug (open, resolved, or all), most urgent first, with linked PRs."""
+    where = {"open": "status_category != 'done'", "resolved": "status_category = 'done'"}.get(scope, "1=1")
+    rows = [row_to_dict(r) for r in conn.execute(
+        f"SELECT {OPEN_FIELDS}, resolved, reporter FROM issues WHERE {where} "
+        "ORDER BY status_category = 'done', urgency DESC, created DESC LIMIT ?", (int(limit),))]
+    links = pr_links(conn)
+    for r in rows:
+        r["prs"] = links.get(r["key"], [])
+    return rows
+
+
+def overview(conn, settings=None, days: int = 60) -> dict:
+    now = datetime.now(timezone.utc).astimezone()
+    start = (now - timedelta(days=days - 1)).date()
+    issues = [row_to_dict(r) for r in conn.execute(
+        "SELECT key, status, status_category, priority, assignee, project, created, resolved FROM issues")]
+
+    # weekly created vs resolved (weeks start Monday)
+    def week(d):
+        return d - timedelta(days=d.weekday())
+    first_week = week(start)
+    weeks = []
+    w = first_week
+    while w <= now.date():
+        weeks.append(w); w += timedelta(days=7)
+    created_w = {w: 0 for w in weeks}; resolved_w = {w: 0 for w in weeks}
+    daily_delta: dict = {}
+    for i in issues:
+        c = _local(i["created"])
+        if c and c.date() >= first_week:
+            created_w[week(c.date())] = created_w.get(week(c.date()), 0) + 1
+        if c:
+            daily_delta[c.date()] = daily_delta.get(c.date(), 0) + 1
+        r = _local(i["resolved"]) if i["status_category"] == "done" else None
+        if r and r.date() >= first_week:
+            resolved_w[week(r.date())] = resolved_w.get(week(r.date()), 0) + 1
+        if r:
+            daily_delta[r.date()] = daily_delta.get(r.date(), 0) - 1
+
+    backlog, running, d = [], sum(v for k, v in daily_delta.items() if k < start), start
+    while d <= now.date():
+        running += daily_delta.get(d, 0)
+        backlog.append({"date": d.isoformat(), "open": running})
+        d += timedelta(days=1)
+
+    open_i = [i for i in issues if i["status_category"] != "done"]
+
+    def count(rows, key, order=None, top=None):
+        c: dict = {}
+        for r in rows:
+            k = r.get(key) or ("Unassigned" if key == "assignee" else "None")
+            c[k] = c.get(k, 0) + 1
+        items = sorted(c.items(), key=lambda kv: (order.index(kv[0]) if order and kv[0] in order
+                                                    else 99, -kv[1]))
+        if top and len(items) > top:
+            rest = sum(v for _, v in items[top - 1:])
+            items = items[:top - 1] + [("Other", rest)]
+        return [{"label": k, "n": v} for k, v in items]
+
+    buckets = [("0–2 days", 0, 2), ("3–7 days", 3, 7), ("8–14 days", 8, 14),
+               ("15–30 days", 15, 30), ("31–60 days", 31, 60), ("60+ days", 61, 10**6)]
+    aging = []
+    for label, lo, hi in buckets:
+        n = sum(1 for i in open_i if (c := _local(i["created"])) and lo <= (now - c).days <= hi)
+        if n or hi <= 60:
+            aging.append({"label": label, "n": n})
+
+    res_hours = [(_local(i["resolved"]) - _local(i["created"])).total_seconds() / 3600
+                 for i in issues if i["status_category"] == "done" and i["resolved"] and i["created"]]
+    res_hours.sort()
+    median_h = res_hours[len(res_hours) // 2] if res_hours else None
+
+    prio_order = settings.priority_order if settings else ["Highest", "High", "Medium", "Low", "Lowest"]
+    seven = now - timedelta(days=7)
+    return {
+        "days": days,
+        "kpis": {
+            "open": len(open_i),
+            "created_7d": sum(1 for i in issues if (c := _local(i["created"])) and c >= seven),
+            "resolved_7d": sum(1 for i in issues if i["status_category"] == "done"
+                               and (r := _local(i["resolved"])) and r >= seven),
+            "unassigned": sum(1 for i in open_i if not i["assignee"]),
+            "high_open": sum(1 for i in open_i if (i["priority"] or "") in prio_order[:2]),
+            "median_resolve_h": round(median_h, 1) if median_h is not None else None,
+            "total": len(issues),
+        },
+        "weekly": [{"week": w.isoformat(), "created": created_w.get(w, 0),
+                    "resolved": resolved_w.get(w, 0)} for w in weeks],
+        "backlog": backlog,
+        "by_status": count(open_i, "status"),
+        "by_priority": count(open_i, "priority", order=prio_order),
+        "by_assignee": count(open_i, "assignee", top=8),
+        "by_project": count(issues, "project"),
+        "aging": aging,
+    }
+
+
+# =========================================================================== GitHub
+def pr_links(conn) -> dict[str, list[dict]]:
+    links: dict[str, list[dict]] = {}
+    for r in conn.execute("SELECT repo, number, title, url, status, state, jira_keys FROM github_prs"):
+        for k in json.loads(r["jira_keys"] or "[]"):
+            links.setdefault(k, []).append({"repo": r["repo"], "number": r["number"], "url": r["url"],
+                                            "status": r["status"], "state": r["state"]})
+    return links
+
+
+def list_prs(conn, relation: str | None = None, state: str | None = None) -> list[dict]:
+    rows = [row_to_dict(r) for r in conn.execute(
+        "SELECT * FROM github_prs ORDER BY state='OPEN' DESC, updated DESC")]
+    if relation:
+        rows = [r for r in rows if relation in r["relations"]]
+    if state:
+        rows = [r for r in rows if r["state"] == state.upper()]
+    return rows
+
+
+def list_branches(conn) -> list[dict]:
+    return [row_to_dict(r) for r in conn.execute("SELECT * FROM github_branches ORDER BY committed DESC")]
+
+
+def github_summary(conn) -> dict:
+    prs = list_prs(conn)
+    mine_open = [p for p in prs if "authored" in p["relations"] and p["state"] == "OPEN"]
+    by_status: dict = {}
+    for p in mine_open:
+        by_status[p["status"]] = by_status.get(p["status"], 0) + 1
+    return {
+        "login": get_state(conn, "github_login"),
+        "last_sync": get_state(conn, "github_last_sync"),
+        "last_error": get_state(conn, "github_last_error") or None,
+        "my_open": len(mine_open),
+        "needs_my_review": sum(1 for p in prs if "review_requested" in p["relations"] and p["state"] == "OPEN"),
+        "failing": sum(1 for p in mine_open if p["status"] == "Checks failing"),
+        "ready": sum(1 for p in mine_open if p["status"] == "Ready to merge"),
+        "merged_60d": sum(1 for p in prs if "authored" in p["relations"] and p["state"] == "MERGED"),
+        "branches": conn.execute("SELECT COUNT(*) FROM github_branches").fetchone()[0],
+        "my_open_by_status": [{"label": k, "n": v} for k, v in sorted(by_status.items(), key=lambda kv: -kv[1])],
+    }

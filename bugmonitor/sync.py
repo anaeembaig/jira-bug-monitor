@@ -132,6 +132,14 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
         minutes = int((started - parse_ts(last)).total_seconds() // 60) + 5  # overlap for safety
         jql = f"({base}) AND updated >= -{minutes}m ORDER BY updated ASC"
 
+    me = get_state(conn, "jira_me")
+    if me is None and hasattr(client, "myself"):
+        try:
+            me = client.myself().get("displayName") or ""
+            set_state(conn, "jira_me", me)
+        except Exception:
+            me = ""
+
     cats = status_categories(conn)
     stats = {"seen": 0, "new": 0, "changed": 0, "alerts": 0, "first_sync": first_sync,
              "removed": 0}
@@ -190,6 +198,11 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
             if (a.reopened and old["status_category"] == "done"
                     and d["status_category"] != "done"):
                 alerter.raise_alert(d, "reopened", f"now {d['status']}"); stats["alerts"] += 1
+            if (a.assigned_to_me and me and d["assignee"] == me and old["assignee"] != me
+                    and d["status_category"] != "done" and not first_sync):
+                # Always worth a ping, whatever the priority.
+                alerter.raise_alert(d, "assigned_to_me", f"previously {old['assignee'] or 'unassigned'}",
+                                    external=True); stats["alerts"] += 1
 
     # ---- keep the store in scope
     if scope_changed:
@@ -216,6 +229,23 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     return stats
 
 
+def sync_github_safe(conn, settings: Settings, alerter: Alerter | None = None) -> dict | None:
+    """Run the GitHub sync if enabled; record errors instead of raising."""
+    if not settings.github.enabled:
+        return None
+    from .github_client import GitHubClient, resolve_token
+    try:
+        from .github_sync import sync_github
+        client = GitHubClient(resolve_token(settings.github.token))
+        return sync_github(conn, settings, client, alerter)
+    except Exception as e:
+        conn.rollback()
+        set_state(conn, "github_last_error", f"{now_iso()} {e}")
+        conn.commit()
+        log.warning("GitHub sync failed: %s", e)
+        return {"error": str(e)}
+
+
 def run_forever(conn, settings: Settings, client: JiraClient, stop_event=None) -> None:
     alerter = Alerter(settings, conn)
     interval = max(settings.jira.poll_minutes, 1) * 60
@@ -227,6 +257,7 @@ def run_forever(conn, settings: Settings, client: JiraClient, stop_event=None) -
             set_state(conn, "last_sync_error", f"{now_iso()} {e}")
             conn.commit()
             log.exception("Sync failed")
+        sync_github_safe(conn, settings, alerter)
         if stop_event:
             stop_event.wait(interval)
         else:

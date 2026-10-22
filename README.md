@@ -1,11 +1,16 @@
 # Jira Bug Monitor
 
-A local app that watches Jira for bugs, alerts you when something changes, tracks every status change, and estimates fix times. Any Claude session — Claude Code (CLI) or Claude Desktop — can query it and log work to the same shared record.
+A local app that watches Jira bugs and your GitHub pull requests, alerts you when something changes, tracks every status change, and estimates fix times. Any Claude session, in Claude Code (CLI) or Claude Desktop, can query it and log work to the same shared record.
 
 ## What It Does
 
 - **New bug alerts** on the dashboard, desktop pop-ups, Slack, Teams, and email
-- **Live status board** with every open bug, sorted by an urgency score from 0 to 100
+- **Dashboard** with four tabs:
+  - **Overview:** KPIs and charts for the last 60 days, including weekly created vs. resolved, open bugs over time, and open bugs by priority, status, assignee, and age
+  - **Bugs:** every tracked bug, open or resolved, sorted by an urgency score from 0 to 100
+  - **GitHub:** your pull requests and branches with live review and CI status
+  - **Activity:** alerts, work in progress, and time logged
+- **Jira and GitHub linking** through the ticket key in a branch name or PR title, such as `humfe-4233-fix`
 - **Full timeline** for each ticket, built from the Jira changelog plus work you log from Claude
 - **Time in status** for each ticket, such as 3 hours in To Do and 6 hours in In Progress
 - **Fix estimates** based on how long similar resolved bugs took
@@ -61,11 +66,37 @@ Set channels in the `[alerts]` section of `config.toml`. Then run `python -m bug
 
 Alerts fire for these events:
 
-- A new bug appears
-- A bug's priority goes up
-- A resolved bug is reopened
+| Event | Sent to Teams, Slack, and email |
+|---|---|
+| A new bug appears | At or above `external_min_priority` (default High) |
+| A bug's priority goes up | At or above `external_min_priority` |
+| A resolved bug is reopened | At or above `external_min_priority` |
+| A bug is assigned to you | Always |
+| Someone requests your review on a PR | When `alerts_to_external = true` |
+| Checks start failing on your PR | When `alerts_to_external = true` |
+| Your PR is approved or gets changes requested | When `alerts_to_external = true` |
+| Your PR is merged | When `alerts_to_external = true` |
 
-Slack, Teams, and email only fire at or above `external_min_priority`, which defaults to High. That keeps busy channels quiet.
+The dashboard and desktop pop-ups get every alert.
+
+## Connect GitHub
+
+1. Create a classic token at <https://github.com/settings/tokens/new> with the **repo** scope.
+2. If `tcp-software` uses single sign-on, open the token, choose **Configure SSO**, and authorize it for the organization.
+3. In `config.toml`, add the following:
+
+   ```toml
+   [github]
+   enabled = true
+   token = "ghp_..."
+   orgs = ["tcp-software"]
+   jira_prefixes = ["HUMFE", "HUM"]
+   ```
+
+4. Run `.venv/bin/python -m bugmonitor check`. It should print `GitHub: connected as <you>`.
+5. Restart `./start.sh`.
+
+The monitor finds PRs you authored, were asked to review, reviewed, or are assigned to, from the last 60 days. It also finds your branches in the repos you've opened PRs in. To scan more repos, add them to `repos`. Access is read-only.
 
 ## Using It From Claude
 
@@ -77,6 +108,8 @@ Ask in plain language from any session:
 - "How long will HUM-409 take to fix?"
 - "I'm starting on HUM-412." Then later: "Done with HUM-412. Fixed the null check."
 - "What did I work on this week?"
+- "Which of my PRs are failing checks?" or "What's waiting on my review?"
+- "How did bug intake compare to fixes over the last 60 days?"
 
 ### Available Tools
 
@@ -91,7 +124,11 @@ Ask in plain language from any session:
 | `active_work` | Shows tickets someone is working on now, from any session |
 | `work_report` | Shows time logged per ticket |
 | `list_alerts` and `acknowledge_alerts` | Shows the alert inbox and marks alerts as read |
-| `sync_now` | Pulls from Jira right away |
+| `bug_trends` | Shows 60-day trends, breakdowns, and KPIs |
+| `my_pull_requests` | Lists your PRs with status, checks, review state, and linked Jira keys |
+| `my_branches` | Lists your recent branches with CI status and linked PR |
+| `github_summary` | Shows open PRs by status, reviews waiting on you, and failing checks |
+| `sync_now` | Pulls from Jira and GitHub right away |
 
 Each entry records whether it came from `claude-cli` or `claude-desktop`.
 

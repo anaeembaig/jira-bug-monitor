@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -14,6 +15,21 @@ from .db import connect
 
 log = logging.getLogger("bugmonitor.dashboard")
 STATIC = Path(__file__).parent / "static"
+
+
+def _background_sync(settings: Settings) -> None:
+    """Triggered by the dashboard's Sync button. The sync lock prevents overlaps."""
+    from .jira_client import JiraClient
+    from .sync import sync_github_safe, sync_once
+    conn = connect(settings.db_path)
+    try:
+        j = settings.jira
+        sync_once(conn, settings, JiraClient(j.base_url, j.email, j.api_token))
+        sync_github_safe(conn, settings)
+    except Exception as e:
+        log.warning("Manual sync failed: %s", e)
+    finally:
+        conn.close()
 
 
 def make_handler(settings: Settings):
@@ -41,6 +57,17 @@ def make_handler(settings: Settings):
                                       "text/html; charset=utf-8")
                 if u.path == "/api/summary":
                     return self._json(service.summary(conn))
+                if u.path == "/api/overview":
+                    return self._json(service.overview(conn, settings, int(q.get("days", 60))))
+                if u.path == "/api/issues":
+                    return self._json(service.list_issues(conn, q.get("scope", "all")))
+                if u.path == "/api/github/summary":
+                    return self._json(dict(service.github_summary(conn),
+                                           enabled=settings.github.enabled))
+                if u.path == "/api/github/prs":
+                    return self._json(service.list_prs(conn, q.get("relation"), q.get("state")))
+                if u.path == "/api/github/branches":
+                    return self._json(service.list_branches(conn))
                 if u.path == "/api/open":
                     return self._json(service.list_open(
                         conn, q.get("project"), q.get("assignee"), q.get("priority"),
@@ -64,6 +91,9 @@ def make_handler(settings: Settings):
             u = urlparse(self.path)
             conn = connect(settings.db_path)
             try:
+                if u.path == "/api/sync":
+                    threading.Thread(target=_background_sync, args=(settings,), daemon=True).start()
+                    return self._json({"started": True})
                 m = re.fullmatch(r"/api/alerts/(\d+|all)/ack", u.path)
                 if m:
                     aid = None if m.group(1) == "all" else int(m.group(1))

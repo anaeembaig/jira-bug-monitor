@@ -11,7 +11,7 @@ api_token = ""
 # Which tickets to watch. Default: every bug your account can see.
 # Examples:  issuetype = Bug AND project in (HUM, TCP)
 #            issuetype in (Bug, Defect)
-jql = 'issuetype = Bug AND project in ("HUM_Front", "HUM_Humanity Monolith") AND created >= -60d'
+jql = 'issuetype = Bug AND project in (HUMFE, HUM) AND created >= -60d'
 
 poll_minutes = 5          # how often to check Jira
 backfill_days = 90        # first run also loads bugs resolved in this window (used for estimates)
@@ -23,6 +23,7 @@ new_bug = true
 priority_raised = true
 reopened = true
 alert_on_first_sync = false   # don't flood you with every existing bug on day one
+assigned_to_me = true         # a bug gets assigned to you (always sent to Teams)
 
 # Slack, Teams, and email fire only at or above this priority.
 # Desktop and dashboard alerts fire for everything.
@@ -46,6 +47,20 @@ smtp_user = ""
 smtp_password = ""            # or set BUGMON_SMTP_PASSWORD
 email_from = ""
 email_to = ["anaeem@tcpsoftware.com"]   # only you
+
+# GitHub: your PRs and branches, with live status, linked to Jira by ticket key.
+# Token: github.com/settings/tokens/new, classic, "repo" scope. If tcp-software uses
+# single sign-on, open the token afterward, choose Configure SSO, and Authorize it.
+# Leave token blank to reuse the GitHub CLI login (`gh auth login`).
+[github]
+enabled = false
+token = ""                    # or set GITHUB_TOKEN
+username = ""                 # blank = detected from the token
+orgs = ["tcp-software"]       # only PRs in these orgs
+repos = []                    # extra repos to scan for your branches, e.g. ["tcp-software/web-schedule"]
+jira_prefixes = ["HUMFE", "HUM"]
+days = 60
+alerts_to_external = true     # review requests, failing checks, approvals, and merges go to Teams
 
 [dashboard]
 host = "127.0.0.1"            # local only

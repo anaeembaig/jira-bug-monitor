@@ -27,6 +27,7 @@ class AlertSettings:
     priority_raised: bool = True
     reopened: bool = True
     alert_on_first_sync: bool = False
+    assigned_to_me: bool = True      # a bug gets assigned to you
     # Slack, Teams, and email only fire at or above this priority.
     # Desktop and dashboard alerts fire for everything.
     external_min_priority: str = "Medium"
@@ -44,6 +45,18 @@ class AlertSettings:
 
 
 @dataclass
+class GitHubSettings:
+    enabled: bool = False
+    token: str = ""                 # blank = use `gh auth token` if the GitHub CLI is installed
+    username: str = ""              # blank = detect from the token
+    orgs: list[str] = field(default_factory=list)   # limit PR search, e.g. ["tcp-software"]
+    repos: list[str] = field(default_factory=list)  # extra repos to scan for your branches
+    jira_prefixes: list[str] = field(default_factory=list)  # blank = projects in your Jira scope
+    days: int = 60
+    alerts_to_external: bool = True  # send PR alerts to Teams/Slack/email too
+
+
+@dataclass
 class DashboardSettings:
     host: str = "127.0.0.1"
     port: int = 8765
@@ -54,6 +67,7 @@ class Settings:
     jira: JiraSettings
     alerts: AlertSettings
     dashboard: DashboardSettings
+    github: GitHubSettings
     db_path: Path
     priority_order: list[str]
 
@@ -83,6 +97,8 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
     jira = _apply(JiraSettings(), raw.get("jira", {}))
     alerts = _apply(AlertSettings(), raw.get("alerts", {}))
     dash = _apply(DashboardSettings(), raw.get("dashboard", {}))
+    gh = _apply(GitHubSettings(), raw.get("github", {}))
+    gh.token = os.environ.get("GITHUB_TOKEN", gh.token)
 
     # Secrets from the environment win over the file.
     jira.base_url = os.environ.get("JIRA_BASE_URL", jira.base_url).rstrip("/")
@@ -100,4 +116,4 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
     priority_order = raw.get("priority", {}).get(
         "order", ["Highest", "High", "Medium", "Low", "Lowest"]
     )
-    return Settings(jira, alerts, dash, db, priority_order)
+    return Settings(jira, alerts, dash, gh, db, priority_order)

@@ -58,13 +58,20 @@ def main(argv=None) -> int:
         print(f"Connected to {s.jira.base_url} as {me.get('displayName')} ({me.get('emailAddress')})")
         print(f"Watching JQL: {s.jira.jql}")
         print(f"Database: {s.db_path}")
+        if s.github.enabled:
+            from .github_client import GitHubClient, resolve_token
+            gh = GitHubClient(resolve_token(s.github.token))
+            print(f"GitHub: connected as {gh.viewer()}"
+                  + (f" (orgs: {', '.join(s.github.orgs)})" if s.github.orgs else ""))
         return 0
 
     conn = connect(s.db_path)
 
     if a.command == "sync":
-        from .sync import sync_once
-        print(sync_once(conn, s, _client(s)))
+        from .sync import sync_github_safe, sync_once
+        print("Jira:", sync_once(conn, s, _client(s)))
+        if s.github.enabled:
+            print("GitHub:", sync_github_safe(conn, s))
         return 0
 
     if a.command == "test-alert":

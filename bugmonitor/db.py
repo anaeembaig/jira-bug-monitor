@@ -74,6 +74,24 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE INDEX IF NOT EXISTS ix_alerts_ack ON alerts(acknowledged, ts);
 
 CREATE TABLE IF NOT EXISTS sync_state (k TEXT PRIMARY KEY, v TEXT);
+
+CREATE TABLE IF NOT EXISTS github_prs (
+    id TEXT PRIMARY KEY, repo TEXT, number INTEGER, title TEXT, url TEXT,
+    state TEXT,                -- OPEN | MERGED | CLOSED
+    is_draft INTEGER, review_decision TEXT, checks TEXT, mergeable TEXT,
+    head TEXT, base TEXT, author TEXT,
+    relations TEXT,            -- JSON: authored | review_requested | reviewed | assigned | involved
+    jira_keys TEXT,            -- JSON list of linked Jira keys
+    additions INTEGER, deletions INTEGER,
+    created TEXT, updated TEXT, merged_at TEXT, closed_at TEXT,
+    status TEXT,               -- human label, e.g. "Checks failing"
+    last_synced TEXT
+);
+CREATE TABLE IF NOT EXISTS github_branches (
+    repo TEXT, name TEXT, sha TEXT, committed TEXT, message TEXT, checks TEXT,
+    pr_number INTEGER, pr_state TEXT, pr_url TEXT, jira_keys TEXT, url TEXT,
+    PRIMARY KEY (repo, name)
+);
 """
 
 
@@ -107,7 +125,7 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
     d = dict(row)
-    for k in ("components", "labels", "channels"):
+    for k in ("components", "labels", "channels", "relations", "jira_keys"):
         if k in d and isinstance(d[k], str):
             try:
                 d[k] = json.loads(d[k])
