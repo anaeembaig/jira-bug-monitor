@@ -83,6 +83,18 @@ Alerts fire for these events:
 
 The dashboard and desktop pop-ups get every alert. Priorities from both Jira schemes are supported (Highest to Lowest, and Blocker to Trivial). A priority the monitor doesn't recognize is always sent, never dropped.
 
+### Turn Notifications On
+
+```
+.venv/bin/python -m bugmonitor notifications             # see what's on and where it goes
+.venv/bin/python -m bugmonitor notifications --activate  # turn on the recommended set
+.venv/bin/python -m bugmonitor notifications --preview   # send a sample message to Teams
+```
+
+`--activate` edits only the notification settings in `config.toml`, keeps a backup as `config.toml.bak`, and never touches your tokens or webhook URLs. Restart `./start.sh` afterward.
+
+Teams messages are color coded: red for failing checks and conflicts, amber for priority raises, reopened bugs, and changes requested, and green for approvals and merges. Each one has buttons to open the ticket or PR, and to open the dashboard.
+
 ## Connect GitHub
 
 1. Create a classic token at <https://github.com/settings/tokens/new> with the **repo** scope.
@@ -188,6 +200,7 @@ python -m bugmonitor dashboard    # dashboard only
 python -m bugmonitor test-alert   # send a test alert
 python -m bugmonitor install-claude  # re-register with Claude Desktop and Claude Code
 python -m bugmonitor doctor       # show version, running copies, and database locks
+python -m bugmonitor notifications --activate --preview  # turn on notifications and test Teams
 python -m pytest -q               # run tests
 ```
 

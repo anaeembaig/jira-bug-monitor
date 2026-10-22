@@ -32,6 +32,36 @@ TITLES = {
 }
 
 
+def teams_card(title: str, issue: dict, kind: str, detail: str, dash) -> dict:
+    url = issue.get("url") or ""
+    is_pr = "github.com" in url
+    facts = [{"title": t, "value": v} for t, v in (
+        ("Type", issue.get("issuetype") or ("Pull request" if is_pr else "")),
+        ("Priority", issue.get("priority") or ""),
+        ("Status", issue.get("status") or ""),
+        ("Author" if is_pr else "Assignee", issue.get("assignee") or ("" if is_pr else "Unassigned")),
+    ) if v]
+    body = [
+        {"type": "TextBlock", "text": title, "weight": "Bolder", "size": "Medium", "wrap": True,
+         "color": CARD_COLOR.get(kind, "Default")},
+        {"type": "TextBlock", "text": issue.get("summary") or "", "wrap": True, "spacing": "Small"},
+    ]
+    if detail:
+        body.append({"type": "TextBlock", "text": detail, "wrap": True, "isSubtle": True,
+                     "spacing": "Small", "maxLines": 4})
+    if facts:
+        body.append({"type": "FactSet", "facts": facts})
+    actions = []
+    if url:
+        actions.append({"type": "Action.OpenUrl", "title": "Open in GitHub" if is_pr else "Open in Jira",
+                        "url": url})
+    actions.append({"type": "Action.OpenUrl", "title": "Open dashboard",
+                    "url": f"http://{dash.host}:{dash.port}"})
+    return {"type": "AdaptiveCard", "version": "1.4",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "body": body, "actions": actions}
+
+
 def desktop_notify(title: str, body: str) -> bool:
     system = platform.system()
     try:
@@ -68,6 +98,15 @@ def desktop_notify(title: str, body: str) -> bool:
     return False
 
 
+# Adaptive Card text colors per alert kind (Attention = red, Warning = amber, Good = green).
+CARD_COLOR = {
+    "new_bug": "Default", "priority_raised": "Warning", "reopened": "Warning",
+    "assigned_to_me": "Accent", "my_status": "Accent", "review_requested": "Accent",
+    "checks_failed": "Attention", "merge_conflicts": "Attention", "changes_requested": "Warning",
+    "pr_approved": "Good", "pr_merged": "Good", "pr_comment": "Default",
+}
+
+
 class Alerter:
     def __init__(self, settings: Settings, conn):
         self.s = settings
@@ -96,7 +135,7 @@ class Alerter:
         if external if external is not None else self._external_ok(issue.get("priority")):
             if self.a.slack_webhook and self._slack(title, body, issue):
                 channels.append("slack")
-            if self.a.teams_webhook and self._teams(title, body, issue):
+            if self.a.teams_webhook and self._teams(title, body, issue, kind, detail):
                 channels.append("teams")
             if self.a.email_enabled and self.a.email_to and self._email(title, body, issue):
                 channels.append("email")
@@ -122,23 +161,9 @@ class Alerter:
         }
         return self._post(self.a.slack_webhook, payload, "Slack")
 
-    def _teams(self, title, body, issue) -> bool:
+    def _teams(self, title, body, issue, kind: str = "", detail: str = "") -> bool:
         # Works with a Teams "Workflows" webhook (Power Automate), which expects an Adaptive Card.
-        card = {
-            "type": "AdaptiveCard", "version": "1.4",
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "body": [
-                {"type": "TextBlock", "text": title, "weight": "Bolder", "size": "Medium",
-                 "wrap": True},
-                {"type": "TextBlock", "text": body, "wrap": True},
-                {"type": "FactSet", "facts": [
-                    {"title": "Status", "value": issue.get("status") or ""},
-                    {"title": "Assignee", "value": issue.get("assignee") or "Unassigned"},
-                ]},
-            ],
-            "actions": [{"type": "Action.OpenUrl", "title": "Open in Jira",
-                         "url": issue.get("url") or ""}],
-        }
+        card = teams_card(title, issue, kind, detail, self.s.dashboard)
         payload = {"type": "message", "attachments": [
             {"contentType": "application/vnd.microsoft.card.adaptive", "content": card}]}
         return self._post(self.a.teams_webhook, payload, "Teams")

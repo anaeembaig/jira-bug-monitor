@@ -555,3 +555,77 @@ def test_pr_review_details_comments_and_alerts(env):
     assert pr["approvals"] == 1 and pr["status"] == "Merge conflicts"
     gs = service.github_summary(conn)
     assert gs["dev_reviewed"] == 1 and gs["approved"] == 1
+
+
+# ------------------------------------------------------------------ notifications setup
+OLD_CONFIG = """# Jira Bug Monitor settings.
+[jira]
+base_url = "https://timeclockplus.atlassian.net"
+email = "anaeem@tcpsoftware.com"
+api_token = "secret-token"   # keep private
+jql = 'issuetype = Bug AND project in (HUMFE, HUM) AND created >= -60d'
+retention_days = 60
+
+[alerts]
+new_bug = true
+external_min_priority = "High"   # old threshold
+desktop = true
+teams_webhook = "https://prod-00.westus.logic.azure.com/workflows/abc?sig=xyz"
+
+[dashboard]
+port = 8765
+
+[priority]
+order = ["Highest", "High", "Medium", "Low", "Lowest"]
+"""
+
+
+def test_notifications_activate_edits_config_safely(tmp_path, monkeypatch):
+    import tomllib
+    from bugmonitor import notify_setup
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(OLD_CONFIG)
+    monkeypatch.setenv("BUGMON_DB", str(tmp_path / "n.db"))
+    for k in ("JIRA_API_TOKEN", "BUGMON_TEAMS_WEBHOOK"):
+        monkeypatch.delenv(k, raising=False)
+
+    assert notify_setup.main(["--activate"], str(cfg)) == 0
+    data = tomllib.loads(cfg.read_text())
+    a = data["alerts"]
+    assert a["external_min_priority"] == "Normal" and a["assigned_to_me"] and a["my_status_changes"]
+    assert a["teams_webhook"].endswith("sig=xyz")                      # untouched
+    assert data["jira"]["api_token"] == "secret-token"                  # untouched
+    assert data["jira"]["my_jql"] == "assignee = currentUser() AND project in (HUMFE, HUM) AND updated >= -60d"
+    assert data["github"]["alerts_to_external"] is True
+    assert "# keep private" in cfg.read_text() and (tmp_path / "config.toml.bak").exists()
+
+    # Running again changes nothing, and a custom my_jql is never overwritten.
+    cfg.write_text(cfg.read_text().replace("updated >= -60d", "updated >= -30d"))
+    assert notify_setup.set_config_values(cfg, *notify_setup.recommended(load_settings(str(cfg)))) == []
+    assert "-30d" in tomllib.loads(cfg.read_text())["jira"]["my_jql"]
+
+
+def test_notifications_preview_and_card(tmp_path, monkeypatch):
+    from bugmonitor import notify_setup
+    from bugmonitor.alerts import teams_card
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(OLD_CONFIG)
+    monkeypatch.setenv("BUGMON_DB", str(tmp_path / "n.db"))
+    monkeypatch.delenv("BUGMON_TEAMS_WEBHOOK", raising=False)
+    sent = []
+
+    class R:
+        status_code = 202; text = ""
+
+    monkeypatch.setattr("bugmonitor.alerts.requests.post", lambda url, json, timeout: sent.append(json) or R())
+    s = load_settings(str(cfg))
+    assert notify_setup.preview(s) == "Preview sent to Teams."
+    texts = [b["text"] for b in sent[0]["attachments"][0]["content"]["body"]]
+    assert "- A ticket is assigned to you" in texts and not any("PR:" in t for t in texts)  # GitHub off
+
+    card = teams_card("Checks failing: web-schedule#1", {"key": "x", "summary": "Fix",
+                      "url": "https://github.com/a/b/pull/1", "assignee": "me"}, "checks_failed", "build", s.dashboard)
+    assert card["body"][0]["color"] == "Attention" and card["actions"][0]["title"] == "Open in GitHub"
+    assert card["actions"][1]["url"] == "http://127.0.0.1:8765"
+    status = "\n".join(notify_setup.status(s))
+    assert "Teams:   connected" in status and "Teams at High+ priority" in status

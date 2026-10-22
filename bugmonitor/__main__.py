@@ -8,6 +8,7 @@
   mcp        Start the MCP server on stdio (Claude starts this for you)
   install-claude  Connect the monitor to Claude Desktop and Claude Code
   doctor     Show version, running copies, and what holds the database
+  notifications  Show your notifications; add --activate to turn them on, --preview to test Teams
 """
 from __future__ import annotations
 
@@ -29,16 +30,24 @@ def _client(s):
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="bugmonitor", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["run", "sync", "check", "dashboard", "test-alert", "mcp", "install-claude", "doctor"])
+    p.add_argument("command", choices=["run", "sync", "check", "dashboard", "test-alert", "mcp", "install-claude", "doctor",
+                                        "notifications"])
     p.add_argument("--config", help="Path to config.toml")
     p.add_argument("--no-browser", action="store_true", help="Don't open the dashboard on start")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--activate", action="store_true", help="notifications: turn on the recommended set")
+    p.add_argument("--preview", action="store_true", help="notifications: send a sample to Teams")
     a = p.parse_args(argv)
 
     if a.command == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()
         return 0
+
+    if a.command == "notifications":
+        from .notify_setup import main as notifications
+        return notifications([f for f, on in (("--activate", a.activate), ("--preview", a.preview)) if on],
+                             a.config)
 
     if a.command == "doctor":
         from .doctor import main as doctor
