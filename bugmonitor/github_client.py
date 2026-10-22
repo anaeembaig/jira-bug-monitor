@@ -12,19 +12,28 @@ API = "https://api.github.com/graphql"
 PR_FIELDS = """
 ... on PullRequest {
   id number title url state isDraft createdAt updatedAt mergedAt closedAt
-  headRefName baseRefName reviewDecision mergeable additions deletions
+  headRefName baseRefName reviewDecision mergeable mergeStateStatus additions deletions
   repository { nameWithOwner }
   author { login }
   assignees(first: 10) { nodes { login } }
-  reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
-  latestReviews(first: 20) { nodes { author { login } state } }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  labels(first: 20) { nodes { name color } }
+  reviewRequests(first: 20) { nodes { requestedReviewer {
+    ... on User { login } ... on Team { name } } } }
+  latestReviews(first: 20) { nodes { author { login } state submittedAt url } }
+  reviews(last: 30) { nodes { id author { login } state submittedAt url body } }
+  comments(last: 20) { totalCount nodes { id author { login } body createdAt url } }
+  reviewThreads(first: 50) { totalCount nodes { isResolved isOutdated path line
+    comments(first: 1) { totalCount nodes { id author { login } body createdAt url } } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state
+    contexts(first: 40) { nodes {
+      ... on CheckRun { name conclusion status detailsUrl }
+      ... on StatusContext { context state targetUrl } } } } } } }
 }
 """
 
 SEARCH_Q = """
 query($q: String!, $after: String) {
-  search(query: $q, type: ISSUE, first: 50, after: $after) {
+  search(query: $q, type: ISSUE, first: 25, after: $after) {
     pageInfo { hasNextPage endCursor }
     nodes { %s }
   }

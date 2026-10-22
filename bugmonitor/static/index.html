@@ -150,6 +150,18 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .times{display:flex;gap:6px;flex-wrap:wrap}
 .cat-new{border-top:3px solid var(--neutral)}.cat-indeterminate{border-top:3px solid var(--series-1)}.cat-done{border-top:3px solid var(--good)}
 
+/* ---------- PR details */
+.rv{display:inline-flex;align-items:center;gap:4px;font-size:12px;border:1px solid var(--line-strong);border-radius:999px;padding:1px 8px 1px 6px;white-space:nowrap}
+.rv svg{width:12px;height:12px}
+.rv.good{color:var(--good-ink)}.rv.serious{color:var(--serious-ink)}.rv.warning{color:var(--warning-ink)}.rv.neutral{color:var(--ink-2)}
+.convo{display:grid;gap:10px}
+.cm{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.cm.open-thread{border-left:3px solid var(--serious)}
+.cm-h{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-3);flex-wrap:wrap}
+.cm-h b{color:var(--ink);font-size:13px}
+.cm-b{white-space:pre-wrap;font-size:13px;margin-top:6px;max-height:180px;overflow:auto;word-break:break-word}
+.path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--surface-2);border-radius:4px;padding:1px 5px}
+
 /* ---------- drawer */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .15s;z-index:30}
 .scrim.on{opacity:1;pointer-events:auto}
@@ -298,10 +310,28 @@ const ICON = {
 };
 const stBadge = (cls, label) => `<span class="st ${cls}">${ICON[cls]}${esc(label)}</span>`;
 const priBadge = p => p ? stBadge(PRI_CLS[(p||"").toLowerCase()] || "neutral", p) : '<span class="muted">None</span>';
-const PR_CLS = {"Ready to merge":"good","Approved":"good","Merged":"good","Checks failing":"critical",
+const PR_CLS = {"Ready to merge":"good","Approved":"good","Merged":"good","Checks failing":"critical","Merge conflicts":"critical",
   "Changes requested":"serious","Checks running":"warning","Awaiting review":"neutral","Draft":"neutral","Closed":"neutral"};
 const prBadge = s => stBadge(PR_CLS[s] || "neutral", s);
-const CHECK = {SUCCESS:["good","Passing"],FAILURE:["critical","Failing"],ERROR:["critical","Error"],PENDING:["warning","Running"],EXPECTED:["warning","Waiting"]};
+const RV = {APPROVED:["good","Approved"],CHANGES_REQUESTED:["serious","Changes requested"],COMMENTED:["neutral","Commented"],DISMISSED:["neutral","Dismissed"]};
+const rvState = r => r.pending ? ["warning","Pending"] : (RV[r.state] || ["neutral", r.state || "Pending"]);
+const rvChip = r => { const [c, l] = rvState(r); return `<span class="rv ${c}" title="${esc(r.login)}: ${l}">${ICON[c]}${esc(r.login.replace("team:", "@"))}</span>`; };
+const MERGE = {CLEAN:"Ready to merge",BEHIND:"Behind base branch",DIRTY:"Merge conflicts",BLOCKED:"Blocked by required reviews or checks",
+  UNSTABLE:"Non-required checks failing",HAS_HOOKS:"Ready (with hooks)",DRAFT:"Draft",UNKNOWN:"Calculating"};
+const prRef = p => `${esc(p.repo.split("/")[1])}#${p.number}`;
+/* Dev review outcome from the reviewers' latest states. */
+function devReview(reviewers, approvals) {
+  const done = (reviewers || []).filter(r => !r.pending && r.state);
+  const pending = (reviewers || []).filter(r => r.pending).length;
+  const tail = pending ? ` · ${pending} pending` : "";
+  if (done.some(r => r.state === "CHANGES_REQUESTED")) return ["serious", "Reviewed · changes requested" + tail];
+  if (approvals) return ["good", `Reviewed · ${approvals} approval${approvals === 1 ? "" : "s"}` + tail];
+  if (done.length) return ["neutral", "Reviewed · comments only" + tail];
+  return ["warning", pending ? `Waiting on ${pending} reviewer${pending === 1 ? "" : "s"}` : "No reviewers yet"];
+}
+const CHECK = {SUCCESS:["good","Passing"],FAILURE:["critical","Failing"],ERROR:["critical","Error"],PENDING:["warning","Running"],EXPECTED:["warning","Waiting"],
+  NEUTRAL:["neutral","Neutral"],SKIPPED:["neutral","Skipped"],CANCELLED:["neutral","Cancelled"],TIMED_OUT:["critical","Timed out"],ACTION_REQUIRED:["serious","Action required"],
+  IN_PROGRESS:["warning","Running"],QUEUED:["warning","Queued"],STALE:["neutral","Stale"],STARTUP_FAILURE:["critical","Failed to start"]};
 const checkBadge = c => c ? stBadge(...(CHECK[c] || ["neutral", c])) : '<span class="muted">—</span>';
 const REVIEW = {APPROVED:["good","Approved"],CHANGES_REQUESTED:["serious","Changes requested"],REVIEW_REQUIRED:["neutral","Review required"]};
 const reviewBadge = r => r ? stBadge(...(REVIEW[r] || ["neutral", r])) : '<span class="muted">—</span>';
@@ -436,8 +466,8 @@ function renderOvGitHub() {
       <div><div class="value num" style="font-size:22px;font-weight:650">${s.my_open}</div><div class="sub">open</div></div>
       <div><div class="value num" style="font-size:22px;font-weight:650">${s.needs_my_review}</div><div class="sub">to review</div></div>
       <div><div class="value num" style="font-size:22px;font-weight:650">${s.failing}</div><div class="sub">failing</div></div></div>
-    <div class="list">${mine.map(p => `<div class="li"><div class="grow"><div class="t1"><a href="${esc(p.url)}" target="_blank">${esc(p.repo.split("/")[1])}#${p.number}</a> ${esc(p.title)}</div>
-      <div class="t2">${prBadge(p.status)}</div></div></div>`).join("") || '<div class="empty">No open PRs</div>'}</div>`;
+    <div class="list">${mine.map(p => `<div class="li" data-pr="${esc(p.repo)}|${p.number}" style="cursor:pointer"><div class="grow"><div class="t1"><span class="key">${prRef(p)}</span> ${esc(p.title)}</div>
+      <div class="t2">${prBadge(p.status)} <span class="muted">· ${esc(devReview(p.reviewers, p.approvals)[1])} · ${p.comments_count || 0} comments${p.unresolved_threads ? `, ${p.unresolved_threads} open` : ""}</span></div></div></div>`).join("") || '<div class="empty">No open PRs</div>'}</div>`;
 }
 
 /* ---------------------------------------------------------------- my tickets */
@@ -544,8 +574,8 @@ orgs = ["tcp-software"]      # only PRs in these orgs</pre>
   }
   $("#gh-sub").innerHTML = s.last_error ? `<span style="color:var(--critical-ink)">Sync error: ${esc(s.last_error)}</span>`
     : `${esc(s.login || "")} · synced ${s.last_sync ? ago(s.last_sync) + " ago" : "never"}`;
-  const tiles = [["Your open PRs", s.my_open], ["Waiting on your review", s.needs_my_review], ["Checks failing", s.failing],
-                 ["Ready to merge", s.ready], ["Merged, last 60 days", s.merged_60d], ["Active branches", s.branches]];
+  const tiles = [["Your open PRs", s.my_open], ["Dev reviewed", s.dev_reviewed ?? 0], ["Waiting on your review", s.needs_my_review],
+                 ["Unresolved comments", s.unresolved_threads ?? 0], ["Checks failing", s.failing], ["Merged, last 60 days", s.merged_60d]];
   const F = {mine: p => p.relations.includes("authored") && p.state === "OPEN",
              review: p => p.relations.includes("review_requested") && p.state === "OPEN",
              merged: p => p.relations.includes("authored") && p.state !== "OPEN",
@@ -558,15 +588,21 @@ orgs = ["tcp-software"]      # only PRs in these orgs</pre>
         ${[["mine","Your open PRs"],["review","Review requests"],["merged","Merged & closed"],["all","Everything"]].map(([v, l]) =>
           `<button data-v="${v}" aria-pressed="${ghFilter === v}">${l}</button>`).join("")}</div></div>
       <div class="tw" style="max-height:none"><table><thead><tr>
-        <th class="nosort">Pull request</th><th class="nosort">Status</th><th class="nosort">Checks</th><th class="nosort">Review</th>
-        <th class="nosort">Jira</th><th class="nosort">Author</th><th class="nosort">Updated</th></tr></thead><tbody>
-        ${prs.map(p => `<tr data-href="${esc(p.url)}">
-          <td class="wrap"><span class="muted">${esc(p.repo.split("/")[1])}#${p.number}</span> ${esc(p.title)}
-            ${p.is_draft ? '<span class="chip">draft</span>' : ""}<div class="sub">${esc(p.head || "")} → ${esc(p.base || "")}
-            <span class="num">+${p.additions ?? 0} −${p.deletions ?? 0}</span></div></td>
-          <td>${prBadge(p.status)}</td><td>${checkBadge(p.checks)}</td><td>${reviewBadge(p.review_decision)}</td>
+        <th class="nosort">Pull request</th><th class="nosort">Status</th><th class="nosort">Reviews</th>
+        <th class="nosort">Comments</th><th class="nosort">Checks</th><th class="nosort">Jira</th><th class="nosort">Updated</th></tr></thead><tbody>
+        ${prs.map(p => `<tr data-pr="${esc(p.repo)}|${p.number}">
+          <td class="wrap"><span class="muted">${prRef(p)}</span> ${esc(p.title)}
+            ${p.is_draft ? '<span class="chip">draft</span>' : ""}${(p.labels || []).map(l => ` <span class="chip">${esc(l)}</span>`).join("")}
+            <div class="sub">${esc(p.head || "")} → ${esc(p.base || "")} <span class="num">+${p.additions ?? 0} −${p.deletions ?? 0}</span>
+            ${p.relations.includes("authored") ? "" : ` · by ${esc(p.author)}`}</div></td>
+          <td>${prBadge(p.status)}</td>
+          <td><div class="chips">${(p.reviewers || []).map(rvChip).join("") || '<span class="muted">No reviewers</span>'}</div>
+            <div class="sub">${esc(devReview(p.reviewers, p.approvals)[1])}</div></td>
+          <td class="num">${p.comments_count || 0}${p.unresolved_threads ? ` <span class="st serious">${ICON.serious}${p.unresolved_threads} open</span>` : ""}
+            ${p.last_comment ? `<div class="sub">last by ${esc(p.last_comment.author)}, ${ago(p.last_comment.at)} ago</div>` : ""}</td>
+          <td>${checkBadge(p.checks)}</td>
           <td><div class="chips">${(p.jira_keys || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}</div></td>
-          <td>${esc(p.author)}</td><td class="muted num">${ago(p.updated)}</td></tr>`).join("")
+          <td class="muted num">${ago(p.updated)}</td></tr>`).join("")
           || '<tr><td colspan="7" class="empty">Nothing here.</td></tr>'}
       </tbody></table></div>
     </div>
@@ -588,7 +624,8 @@ orgs = ["tcp-software"]      # only PRs in these orgs</pre>
 /* ---------------------------------------------------------------- activity */
 async function renderActivity() {
   const [alerts, active, work] = await Promise.all([j("/api/alerts"), j("/api/active"), j("/api/work?days=7")]);
-  const sev = a => a.kind === "my_status" || a.kind === "assigned_to_me" ? "neutral" : a.kind === "checks_failed" ? "critical" : a.kind === "changes_requested" ? "serious"
+  const sev = a => ["my_status", "assigned_to_me", "pr_comment", "review_requested"].includes(a.kind) ? "neutral"
+    : a.kind === "merge_conflicts" ? "critical" : a.kind === "checks_failed" ? "critical" : a.kind === "changes_requested" ? "serious"
     : a.kind === "pr_approved" || a.kind === "pr_merged" ? "good" : PRI_CLS[(a.priority || "").toLowerCase()] || "neutral";
   $("#alerts").innerHTML = alerts.map(a => `
     <div class="li"><span class="st ${sev(a)}" style="padding-top:2px">${ICON[sev(a)]}</span>
@@ -630,7 +667,10 @@ async function openTicket(key) {
         <div class="est"><b>Fix estimate</b><div style="margin-top:4px">${esc(e.summary || e.error || "Not available yet")}</div></div>
         <div class="sect"><h4>Time in each status</h4><div class="chips" style="gap:6px">${byStatus || '<span class="muted">—</span>'}</div></div>
         <div class="sect"><h4>Pull requests & branches</h4>
-          ${(t.prs || []).map(p => `<div class="li"><div class="grow"><a href="${esc(p.url)}" target="_blank">${esc(p.repo)}#${p.number}</a></div>${prBadge(p.status)}</div>`).join("")}
+          ${(t.prs || []).map(p => `<div class="li" data-pr="${esc(p.repo)}|${p.number}" style="cursor:pointer"><div class="grow">
+            <div class="t1">${esc(p.repo)}#${p.number}</div>
+            <div class="t2">${p.approvals ? `${p.approvals} approval${p.approvals === 1 ? "" : "s"}` : "not reviewed yet"}${p.pending && p.pending.length ? ` · waiting on ${esc(p.pending.join(", "))}` : ""}
+              · ${p.comments} comment${p.comments === 1 ? "" : "s"}${p.unresolved ? `, ${p.unresolved} unresolved` : ""}</div></div>${prBadge(p.status)}</div>`).join("")}
           ${(t.branches || []).map(b => `<div class="li"><div class="grow"><a href="${esc(b.url)}" target="_blank">${esc(b.name)}</a> <span class="muted">${esc(b.repo)}</span></div>${checkBadge(b.checks)}</div>`).join("")}
           ${!(t.prs || []).length && !(t.branches || []).length ? '<div class="muted">None linked. Put the ticket key in the branch name or PR title.</div>' : ""}</div>
         <div class="sect"><h4>Timeline</h4><div class="tl">${(t.timeline || []).slice().reverse().map(ev => `<div>
@@ -640,6 +680,55 @@ async function openTicket(key) {
   }
   d.classList.add("on"); $("#scrim").classList.add("on");
 }
+async function openPR(repo, number) {
+  const p = await j(`/api/github/pr?repo=${encodeURIComponent(repo)}&number=${number}`), d = $("#drawer");
+  if (p.error) { d.innerHTML = `<div class="dr-h"><div style="flex:1">${esc(p.error)}</div><button class="btn" data-close>Close</button></div>`; }
+  else {
+    const det = p.details || {}, convo = det.conversation || [];
+    const openThreads = convo.filter(c => c.kind === "thread" && !c.resolved);
+    const rest = convo.filter(c => !(c.kind === "thread" && !c.resolved));
+    const cm = c => {
+      const label = c.kind === "review" ? `review · ${(RV[c.state] || ["", c.state])[1]}` : c.kind === "thread"
+        ? `${c.resolved ? "resolved" : "open"} thread${c.outdated ? " · outdated" : ""}${c.replies ? ` · ${c.replies} repl${c.replies === 1 ? "y" : "ies"}` : ""}` : "comment";
+      return `<div class="cm ${c.kind === "thread" && !c.resolved ? "open-thread" : ""}">
+        <div class="cm-h"><b>${esc(c.author)}</b><span>${esc(label)}</span>
+          ${c.path ? `<span class="path">${esc(c.path)}${c.line ? ":" + c.line : ""}</span>` : ""}
+          <span>${ago(c.at)} ago</span><a href="${esc(c.url)}" target="_blank" style="margin-left:auto">View</a></div>
+        ${c.body ? `<div class="cm-b">${esc(c.body)}</div>` : ""}</div>`;
+    };
+    d.innerHTML = `
+      <div class="dr-h"><div style="flex:1;min-width:0"><a class="key" href="${esc(p.url)}" target="_blank">${esc(p.repo)}#${p.number}</a>
+        <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(p.title)}</div></div>
+        <button class="btn" data-close>Close</button></div>
+      <div class="dr-b">
+        <div class="kv">
+          <span class="k">Status</span><span>${prBadge(p.status)}</span>
+          <span class="k">Dev review</span><span>${stBadge(...devReview(det.reviewers, p.approvals))}</span>
+          <span class="k">Merge state</span><span>${esc(MERGE[p.merge_state] || p.merge_state || "—")}</span>
+          <span class="k">Checks</span><span>${checkBadge(p.checks)}</span>
+          <span class="k">Author</span><span>${esc(p.author)}</span>
+          <span class="k">Branch</span><span><span class="path">${esc(p.head)}</span> → <span class="path">${esc(p.base)}</span></span>
+          <span class="k">Changes</span><span class="num">+${p.additions ?? 0} −${p.deletions ?? 0}</span>
+          <span class="k">Labels</span><span class="chips">${(p.labels || []).map(l => `<span class="chip">${esc(l)}</span>`).join("") || "—"}</span>
+          <span class="k">Opened</span><span>${esc(new Date(p.created).toLocaleString())}</span>
+          <span class="k">Updated</span><span>${ago(p.updated)} ago</span>
+        </div>
+        <div class="sect"><h4>Jira tickets</h4>${(p.tickets || []).map(t => `<div class="li" data-open="${esc(t.key)}" style="cursor:pointer"><div class="grow">
+          <div class="t1"><span class="key">${esc(t.key)}</span> ${esc(t.summary || "")}</div>
+          <div class="t2">${t.status ? `<span class="pill">${esc(t.status)}</span> ${esc(t.assignee || "")}` : "Not in your synced Jira scope"}</div></div></div>`).join("")
+          || '<div class="muted">No ticket key found in the branch name or title.</div>'}</div>
+        <div class="sect"><h4>Reviewers</h4>${(det.reviewers || []).map(r => { const [c, l] = rvState(r); return `<div class="li"><div class="grow"><b>${esc(r.login.replace("team:", "@"))}</b></div>
+          <span class="st ${c}">${ICON[c]}${l}</span><span class="muted" style="width:70px;text-align:right">${r.at ? ago(r.at) + " ago" : ""}</span></div>`; }).join("")
+          || '<div class="muted">No reviewers requested.</div>'}</div>
+        <div class="sect"><h4>Checks</h4>${(det.checks || []).map(c => `<div class="li"><div class="grow">${c.url ? `<a href="${esc(c.url)}" target="_blank">${esc(c.name)}</a>` : esc(c.name)}</div>${checkBadge(c.state)}</div>`).join("")
+          || '<div class="muted">No checks reported.</div>'}</div>
+        <div class="sect"><h4>Conversation · ${p.comments_count || 0} comments${openThreads.length ? `, ${openThreads.length} unresolved` : ""}</h4>
+          <div class="convo">${[...openThreads, ...rest].map(cm).join("") || '<div class="muted">No comments yet.</div>'}</div></div>
+      </div>`;
+  }
+  d.classList.add("on"); $("#scrim").classList.add("on");
+}
+
 function closeDrawer() { $("#drawer").classList.remove("on"); $("#scrim").classList.remove("on"); }
 
 /* ---------------------------------------------------------------- data + nav */
@@ -676,6 +765,8 @@ document.addEventListener("click", async ev => {
   if (ev.target.closest("[data-stop]") && !ev.target.closest("[data-open]")) return;
   const tab = ev.target.closest(".tab"); if (tab) return show(tab.dataset.view);
   const go = ev.target.closest("[data-goto]"); if (go) { ev.preventDefault(); return show(go.dataset.goto); }
+  const pr = ev.target.closest("[data-pr]");
+  if (pr && !ev.target.closest("[data-open]") && !ev.target.closest("a")) { const [r, n] = pr.dataset.pr.split("|"); return openPR(r, n); }
   const op = ev.target.closest("[data-open]"); if (op) { ev.preventDefault(); ev.stopPropagation(); return openTicket(op.dataset.open); }
   if (ev.target.closest("[data-close]") || ev.target.id === "scrim") return closeDrawer();
   const href = ev.target.closest("tr[data-href]"); if (href && !ev.target.closest("a")) return window.open(href.dataset.href, "_blank");

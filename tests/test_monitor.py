@@ -488,3 +488,70 @@ def test_unknown_and_alt_scheme_priorities_reach_teams(env, monkeypatch):
     al.raise_alert({"key": "A-3", "summary": "x", "priority": "Trivial", "url": "u"}, "new_bug")
     assert len(sent) == 2                         # Major ranks above Medium; unknown is never dropped
     assert s.is_high("Major") and not s.is_high("Normal")
+
+
+def gh_rich(num=2520, comments=(), threads=(), reviews=(), latest=(), requested=(), merge="CLEAN",
+            review=None, checks="SUCCESS"):
+    p = gh_pr(num, f"HUMFE-4233 fix {num}", "humfe-4233-x", review=review, checks=checks, requested=requested)
+    p["mergeStateStatus"] = merge
+    p["labels"] = {"nodes": [{"name": "needs-qa", "color": "fff"}]}
+    p["comments"] = {"totalCount": len(comments), "nodes": [
+        {"id": cid, "author": {"login": who}, "body": body, "createdAt": ts(h), "url": f"u/{cid}"}
+        for cid, who, body, h in comments]}
+    p["reviewThreads"] = {"totalCount": len(threads), "nodes": [
+        {"isResolved": res, "isOutdated": False, "path": path, "line": 12,
+         "comments": {"totalCount": 2, "nodes": [{"id": tid, "author": {"login": who}, "body": body,
+                                                    "createdAt": ts(1), "url": f"u/{tid}"}]}}
+        for tid, who, body, path, res in threads]}
+    p["reviews"] = {"nodes": [{"id": rid, "author": {"login": who}, "state": st, "submittedAt": ts(2),
+                               "url": f"u/{rid}", "body": body} for rid, who, st, body in reviews]}
+    p["latestReviews"] = {"nodes": [{"author": {"login": who}, "state": st, "submittedAt": ts(2), "url": "u"}
+                                    for who, st in latest]}
+    p["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = {"nodes": [
+        {"name": "build", "conclusion": "SUCCESS", "status": "COMPLETED", "detailsUrl": "c/1"},
+        {"context": "ci/lint", "state": "PENDING", "targetUrl": "c/2"}]}
+    return p
+
+
+def test_pr_review_details_comments_and_alerts(env):
+    from bugmonitor.github_sync import sync_github
+    s, conn, jira = env
+    s.github.enabled = True
+    jira.issues["HUMFE-4233"] = issue("HUMFE-4233", "In Progress")
+    sync_once(conn, s, jira)
+    gh = FakeGitHub()
+    gh.prs["a"] = gh_rich(comments=[("C1", "sara-k", "Can you add a test?", 5)],
+                          threads=[("T1", "sara-k", "Null check here?", "src/overtime.ts", False)],
+                          reviews=[("R1", "sara-k", "COMMENTED", "A few notes")],
+                          latest=[("sara-k", "COMMENTED")], requested=["omar-a"])
+    sync_github(conn, s, gh)
+
+    pr = service.get_pr(conn, "web-schedule", 2520)
+    det = pr["details"]
+    assert [r["login"] for r in det["reviewers"]] == ["omar-a", "sara-k"]
+    assert det["reviewers"][0]["pending"] and det["reviewers"][1]["state"] == "COMMENTED"
+    assert pr["approvals"] == 0 and pr["pending_reviewers"] == ["omar-a"]
+    assert pr["unresolved_threads"] == 1 and pr["comments_count"] == 1 + 2 + 1
+    assert {c["kind"] for c in det["conversation"]} == {"comment", "thread", "review"}
+    assert [c["name"] for c in det["checks"]] == ["build", "ci/lint"] and pr["labels"] == ["needs-qa"]
+    assert pr["tickets"][0]["status"] == "In Progress"
+    listed = service.list_prs(conn)[0]
+    assert "details" not in listed and listed["reviewers"] and listed["last_comment"]["author"] == "sara-k"
+    link = service.get_ticket(conn, "HUMFE-4233")["prs"][0]
+    assert link["unresolved"] == 1 and link["pending"] == ["omar-a"]
+
+    # Next sync: a new comment, an approval (repo without required reviews), and a conflict.
+    gh.prs["a"] = gh_rich(comments=[("C1", "sara-k", "Can you add a test?", 5),
+                                    ("C2", "omar-a", "LGTM after the test", 0.5),
+                                    ("C3", "anaeem", "Done, added", 0.2)],      # my own: no alert
+                          threads=[("T1", "sara-k", "Null check here?", "src/overtime.ts", True)],
+                          reviews=[("R1", "sara-k", "COMMENTED", "A few notes"), ("R2", "omar-a", "APPROVED", "")],
+                          latest=[("sara-k", "COMMENTED"), ("omar-a", "APPROVED")], merge="DIRTY")
+    sync_github(conn, s, gh)
+    alerts = {a["kind"]: a for a in service.list_alerts(conn)}
+    assert set(alerts) == {"pr_comment", "pr_approved", "merge_conflicts"}
+    assert "2 new from omar-a" in alerts["pr_comment"]["message"]   # C2 + approval review R2
+    pr = service.get_pr(conn, "tcp-software/web-schedule", 2520)
+    assert pr["approvals"] == 1 and pr["status"] == "Merge conflicts"
+    gs = service.github_summary(conn)
+    assert gs["dev_reviewed"] == 1 and gs["approved"] == 1

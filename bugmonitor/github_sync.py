@@ -44,11 +44,86 @@ def pr_status(pr: dict) -> str:
         return "Changes requested"
     if pr.get("checks") in ("FAILURE", "ERROR"):
         return "Checks failing"
-    if pr.get("review_decision") == "APPROVED":
+    if pr.get("merge_state") == "DIRTY":
+        return "Merge conflicts"
+    approved = pr.get("review_decision") == "APPROVED" or (
+        pr.get("review_decision") is None and (pr.get("approvals") or 0) > 0)
+    if approved:
         return "Ready to merge" if pr.get("checks") in (None, "SUCCESS") else "Approved"
     if pr.get("checks") in ("PENDING", "EXPECTED"):
         return "Checks running"
     return "Awaiting review"
+
+
+def _clip(text: str | None, n: int = 1200) -> str:
+    t = (text or "").strip()
+    return t if len(t) <= n else t[:n - 1] + "…"
+
+
+def _details(n: dict, author: str) -> dict:
+    """Reviewers, conversation, review threads, checks, and labels for one PR."""
+    login = lambda o: ((o or {}).get("login") or "")
+    reviewers = {}
+    for r in (n.get("latestReviews") or {}).get("nodes", []) or []:
+        who = login(r.get("author"))
+        if who and who.lower() != author.lower():
+            reviewers[who] = {"login": who, "state": r.get("state"), "at": r.get("submittedAt"),
+                              "url": r.get("url"), "pending": False}
+    pending = []
+    for rr in (n.get("reviewRequests") or {}).get("nodes", []) or []:
+        rv = rr.get("requestedReviewer") or {}
+        who = rv.get("login") or (f"team:{rv['name']}" if rv.get("name") else "")
+        if who:
+            pending.append(who)
+            reviewers.setdefault(who, {"login": who, "state": None, "at": None, "url": None})
+            reviewers[who]["pending"] = True   # re-requested reviewers are pending again
+
+    convo = []
+    for c in (n.get("comments") or {}).get("nodes", []) or []:
+        convo.append({"id": c["id"], "kind": "comment", "author": login(c.get("author")),
+                      "body": _clip(c.get("body")), "at": c.get("createdAt"), "url": c.get("url")})
+    for r in (n.get("reviews") or {}).get("nodes", []) or []:
+        if (r.get("body") or "").strip() or r.get("state") in ("APPROVED", "CHANGES_REQUESTED"):
+            convo.append({"id": r["id"], "kind": "review", "state": r.get("state"),
+                          "author": login(r.get("author")), "body": _clip(r.get("body")),
+                          "at": r.get("submittedAt"), "url": r.get("url")})
+    threads, unresolved, thread_comments = [], 0, 0
+    for t in (n.get("reviewThreads") or {}).get("nodes", []) or []:
+        first = ((t.get("comments") or {}).get("nodes") or [None])[0]
+        thread_comments += (t.get("comments") or {}).get("totalCount") or 0
+        if not t.get("isResolved"):
+            unresolved += 1
+        if first:
+            item = {"id": first["id"], "kind": "thread", "author": login(first.get("author")),
+                    "body": _clip(first.get("body")), "at": first.get("createdAt"), "url": first.get("url"),
+                    "path": t.get("path"), "line": t.get("line"), "resolved": bool(t.get("isResolved")),
+                    "outdated": bool(t.get("isOutdated")),
+                    "replies": max(((t.get("comments") or {}).get("totalCount") or 1) - 1, 0)}
+            threads.append(item)
+            convo.append(item)
+    convo.sort(key=lambda c: c.get("at") or "", reverse=True)
+
+    checks = []
+    commits = (n.get("commits") or {}).get("nodes") or []
+    rollup = ((commits[0].get("commit") or {}).get("statusCheckRollup") or {}) if commits else {}
+    for c in ((rollup.get("contexts") or {}).get("nodes") or []):
+        if "name" in c:
+            state = c.get("conclusion") or c.get("status")
+            checks.append({"name": c["name"], "state": state, "url": c.get("detailsUrl")})
+        elif "context" in c:
+            checks.append({"name": c["context"], "state": c.get("state"), "url": c.get("targetUrl")})
+
+    return {
+        "reviewers": sorted(reviewers.values(), key=lambda r: (not r["pending"], r["login"].lower())),
+        "pending": pending,
+        "approvals": sum(1 for r in reviewers.values() if r["state"] == "APPROVED" and not r["pending"]),
+        "conversation": convo[:60],
+        "unresolved_threads": unresolved,
+        "comments_count": ((n.get("comments") or {}).get("totalCount") or 0) + thread_comments
+                          + sum(1 for c in convo if c["kind"] == "review" and c["body"]),
+        "checks": checks,
+        "labels": [l["name"] for l in ((n.get("labels") or {}).get("nodes") or [])],
+    }
 
 
 def _map_pr(n: dict, me: str, prefixes: set[str]) -> dict:
@@ -67,6 +142,7 @@ def _map_pr(n: dict, me: str, prefixes: set[str]) -> dict:
     if not rel: rel.append("involved")
     commits = (n.get("commits") or {}).get("nodes") or []
     rollup = ((commits[0].get("commit") or {}).get("statusCheckRollup") or {}) if commits else {}
+    det = _details(n, author)
     d = {
         "id": n["id"], "repo": n["repository"]["nameWithOwner"], "number": n["number"],
         "title": n["title"], "url": n["url"], "state": n["state"], "is_draft": int(bool(n["isDraft"])),
@@ -77,6 +153,10 @@ def _map_pr(n: dict, me: str, prefixes: set[str]) -> dict:
         "additions": n.get("additions"), "deletions": n.get("deletions"),
         "created": n.get("createdAt"), "updated": n.get("updatedAt"),
         "merged_at": n.get("mergedAt"), "closed_at": n.get("closedAt"),
+        "merge_state": n.get("mergeStateStatus"), "labels": det["labels"],
+        "approvals": det["approvals"], "pending_reviewers": det["pending"],
+        "comments_count": det["comments_count"], "unresolved_threads": det["unresolved_threads"],
+        "details": det,
     }
     d["status"] = pr_status(d)
     return d
@@ -84,10 +164,12 @@ def _map_pr(n: dict, me: str, prefixes: set[str]) -> dict:
 
 PR_COLS = ["id", "repo", "number", "title", "url", "state", "is_draft", "review_decision", "checks",
            "mergeable", "head", "base", "author", "relations", "jira_keys", "additions", "deletions",
-           "created", "updated", "merged_at", "closed_at", "status", "last_synced"]
+           "created", "updated", "merged_at", "closed_at", "status", "last_synced", "merge_state",
+           "labels", "approvals", "pending_reviewers", "comments_count", "unresolved_threads", "details"]
+JSON_COLS = ("relations", "jira_keys", "labels", "pending_reviewers", "details")
 
 
-def _pr_alerts(old: dict | None, new: dict) -> list[tuple[str, str]]:
+def _pr_alerts(old: dict | None, new: dict, me: str = "") -> list[tuple[str, str]]:
     """(kind, detail) pairs for changes worth telling you about."""
     out = []
     mine = "authored" in new["relations"]
@@ -106,8 +188,24 @@ def _pr_alerts(old: dict | None, new: dict) -> list[tuple[str, str]]:
                 out.append(("pr_approved", ""))
             elif new["review_decision"] == "CHANGES_REQUESTED":
                 out.append(("changes_requested", ""))
+        elif (new.get("approvals") or 0) > (old.get("approvals") or 0) and new["review_decision"] is None:
+            out.append(("pr_approved", ""))          # repos without required reviews
         if new["state"] == "MERGED" and old["state"] != "MERGED":
             out.append(("pr_merged", f"into {new['base']}"))
+        if new.get("merge_state") == "DIRTY" and old.get("merge_state") != "DIRTY":
+            out.append(("merge_conflicts", f"{new['head']} → {new['base']}"))
+        # New comments or reviews from other people.
+        seen = {c["id"] for c in ((old.get("details") or {}).get("conversation") or [])}
+        fresh = [c for c in new["details"]["conversation"]
+                 if c["id"] not in seen and c["author"].lower() not in (me.lower(), new["author"].lower())]
+        if fresh and old.get("details") is not None:
+            if len(fresh) == 1:
+                c = fresh[0]
+                where = f" on {c['path']}" if c.get("path") else ""
+                out.append(("pr_comment", f"{c['author']}{where}: {_clip(c['body'], 160)}"))
+            else:
+                who = ", ".join(sorted({c["author"] for c in fresh}))
+                out.append(("pr_comment", f"{len(fresh)} new from {who}"))
     return out
 
 
@@ -134,18 +232,21 @@ def sync_github(conn, settings: Settings, client: GitHubClient, alerter: Alerter
             found[pr["id"]] = pr
 
     stats = {"prs": len(found), "branches": 0, "alerts": 0}
-    old_rows = {r["id"]: dict(r, relations=json.loads(r["relations"]))
-                for r in conn.execute("SELECT * FROM github_prs")}
+    old_rows = {}
+    for r in conn.execute("SELECT * FROM github_prs"):
+        d = dict(r)
+        for k in JSON_COLS:
+            d[k] = json.loads(d[k]) if d.get(k) else ([] if k != "details" else None)
+        old_rows[r["id"]] = d
     for pr in found.values():
         if not first:
-            for kind, detail in _pr_alerts(old_rows.get(pr["id"]), pr):
+            for kind, detail in _pr_alerts(old_rows.get(pr["id"]), pr, me):
                 alerter.raise_alert(
                     {"key": f"{pr['repo'].split('/')[-1]}#{pr['number']}", "summary": pr["title"],
                      "priority": None, "status": pr["status"], "assignee": pr["author"],
                      "url": pr["url"]}, kind, detail, external=g.alerts_to_external)
                 stats["alerts"] += 1
-        row = dict(pr, relations=json.dumps(pr["relations"]), jira_keys=json.dumps(pr["jira_keys"]),
-                   last_synced=now_iso())
+        row = dict(pr, last_synced=now_iso(), **{k: json.dumps(pr[k]) for k in JSON_COLS})
         conn.execute(
             f"INSERT OR REPLACE INTO github_prs({','.join(PR_COLS)}) VALUES({','.join('?' * len(PR_COLS))})",
             [row.get(c) for c in PR_COLS])

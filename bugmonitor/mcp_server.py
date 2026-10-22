@@ -124,10 +124,19 @@ def bug_trends(days: int = 60) -> dict:
 
 @mcp.tool()
 def my_pull_requests(relation: str | None = None, state: str | None = None) -> list[dict]:
-    """Your GitHub PRs from the last 60 days with live status (review decision, CI checks)
-    and linked Jira keys. relation: authored | review_requested | reviewed | assigned.
+    """Your GitHub PRs from the last 60 days with live status (review decision, approvals,
+    pending reviewers, comment and unresolved-thread counts, CI checks) and linked Jira keys. relation: authored | review_requested | reviewed | assigned.
     state: OPEN | MERGED | CLOSED."""
     return service.list_prs(conn, relation, state)
+
+
+@mcp.tool()
+def get_pull_request(repo: str, number: int) -> dict:
+    """Full details for one PR: who approved or requested changes, who is still pending,
+    every comment and review thread (with file and resolved state), CI checks, labels,
+    merge state, and the linked Jira tickets with their current status.
+    repo can be "web-schedule" or "tcp-software/web-schedule"."""
+    return service.get_pr(conn, repo, number)
 
 
 @mcp.tool()

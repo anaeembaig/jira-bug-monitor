@@ -27,6 +27,8 @@ TITLES = {
     "pr_approved": "PR approved",
     "changes_requested": "Changes requested",
     "pr_merged": "PR merged",
+    "pr_comment": "New comment on your PR",
+    "merge_conflicts": "Merge conflicts",
 }
 
 

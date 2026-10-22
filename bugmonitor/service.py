@@ -314,21 +314,53 @@ def overview(conn, settings=None, days: int = 60) -> dict:
 # =========================================================================== GitHub
 def pr_links(conn) -> dict[str, list[dict]]:
     links: dict[str, list[dict]] = {}
-    for r in conn.execute("SELECT repo, number, title, url, status, state, jira_keys FROM github_prs"):
+    for r in conn.execute("SELECT repo, number, title, url, status, state, jira_keys, approvals, "
+                          "pending_reviewers, comments_count, unresolved_threads FROM github_prs"):
         for k in json.loads(r["jira_keys"] or "[]"):
-            links.setdefault(k, []).append({"repo": r["repo"], "number": r["number"], "url": r["url"],
-                                            "status": r["status"], "state": r["state"]})
+            links.setdefault(k, []).append({
+                "repo": r["repo"], "number": r["number"], "url": r["url"], "status": r["status"],
+                "state": r["state"], "approvals": r["approvals"] or 0,
+                "pending": json.loads(r["pending_reviewers"] or "[]"),
+                "comments": r["comments_count"] or 0, "unresolved": r["unresolved_threads"] or 0})
     return links
 
 
+def _pr_summary(r: dict) -> dict:
+    """List view: keep reviewers and checks, drop the full conversation."""
+    det = r.pop("details", None) or {}
+    r["reviewers"] = det.get("reviewers", [])
+    r["checks_list"] = det.get("checks", [])
+    last = (det.get("conversation") or [None])[0]
+    r["last_comment"] = {k: last.get(k) for k in ("author", "at", "kind")} if last else None
+    return r
+
+
 def list_prs(conn, relation: str | None = None, state: str | None = None) -> list[dict]:
-    rows = [row_to_dict(r) for r in conn.execute(
+    rows = [_pr_summary(row_to_dict(r)) for r in conn.execute(
         "SELECT * FROM github_prs ORDER BY state='OPEN' DESC, updated DESC")]
     if relation:
         rows = [r for r in rows if relation in r["relations"]]
     if state:
         rows = [r for r in rows if r["state"] == state.upper()]
     return rows
+
+
+def get_pr(conn, repo: str, number: int) -> dict:
+    """Everything about one PR: reviewers, conversation, threads, checks, linked Jira tickets."""
+    if "/" not in repo:  # allow "web-schedule" for "tcp-software/web-schedule"
+        row = conn.execute("SELECT repo FROM github_prs WHERE repo LIKE ? AND number=?",
+                           (f"%/{repo}", int(number))).fetchone()
+        repo = row["repo"] if row else repo
+    r = row_to_dict(conn.execute("SELECT * FROM github_prs WHERE repo=? AND number=?",
+                                 (repo, int(number))).fetchone())
+    if not r:
+        return {"error": f"{repo}#{number} isn't in your synced PRs (last 60 days)."}
+    r["tickets"] = []
+    for k in r.get("jira_keys") or []:
+        t = conn.execute("SELECT key, summary, status, status_category, priority, assignee, url "
+                         "FROM issues WHERE key=?", (k,)).fetchone()
+        r["tickets"].append(dict(t) if t else {"key": k})
+    return r
 
 
 def list_branches(conn) -> list[dict]:
@@ -349,6 +381,11 @@ def github_summary(conn) -> dict:
         "needs_my_review": sum(1 for p in prs if "review_requested" in p["relations"] and p["state"] == "OPEN"),
         "failing": sum(1 for p in mine_open if p["status"] == "Checks failing"),
         "ready": sum(1 for p in mine_open if p["status"] == "Ready to merge"),
+        # Any completed review (approved, changes requested, or commented) counts as dev reviewed.
+        "dev_reviewed": sum(1 for p in mine_open
+                            if any(r.get("state") and not r.get("pending") for r in p.get("reviewers") or [])),
+        "approved": sum(1 for p in mine_open if (p.get("approvals") or 0) > 0),
+        "unresolved_threads": sum(p.get("unresolved_threads") or 0 for p in mine_open),
         "merged_60d": sum(1 for p in prs if "authored" in p["relations"] and p["state"] == "MERGED"),
         "branches": conn.execute("SELECT COUNT(*) FROM github_branches").fetchone()[0],
         "my_open_by_status": [{"label": k, "n": v} for k, v in sorted(by_status.items(), key=lambda kv: -kv[1])],

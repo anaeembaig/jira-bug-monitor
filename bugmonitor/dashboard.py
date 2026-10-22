@@ -68,6 +68,8 @@ def make_handler(settings: Settings):
                                            enabled=settings.github.enabled))
                 if u.path == "/api/github/prs":
                     return self._json(service.list_prs(conn, q.get("relation"), q.get("state")))
+                if u.path == "/api/github/pr":
+                    return self._json(service.get_pr(conn, q.get("repo", ""), int(q.get("number", 0))))
                 if u.path == "/api/github/branches":
                     return self._json(service.list_branches(conn))
                 if u.path == "/api/open":

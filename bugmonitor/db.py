@@ -115,6 +115,9 @@ MIGRATIONS = {
     "issues": [("issuetype", "TEXT"), ("assignee_id", "TEXT"),
                ("in_bugs", "INTEGER DEFAULT 1"),   # matches the bug JQL
                ("in_mine", "INTEGER DEFAULT 0")],  # matches the my-tickets JQL
+    "github_prs": [("merge_state", "TEXT"), ("labels", "TEXT"), ("approvals", "INTEGER"),
+                   ("pending_reviewers", "TEXT"), ("comments_count", "INTEGER"),
+                   ("unresolved_threads", "INTEGER"), ("details", "TEXT")],
 }
 
 
@@ -143,7 +146,8 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
     d = dict(row)
-    for k in ("components", "labels", "channels", "relations", "jira_keys"):
+    for k in ("components", "labels", "channels", "relations", "jira_keys", "pending_reviewers",
+              "details"):
         if k in d and isinstance(d[k], str):
             try:
                 d[k] = json.loads(d[k])
