@@ -180,7 +180,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 <main>
   <!-- ================= OVERVIEW ================= -->
   <section class="view on" id="v-overview">
-    <div class="h-row"><h2>Overview</h2><span class="sub" id="ov-sub">Bugs in scope, last 60 days</span></div>
+    <div class="h-row"><h2>Overview</h2><span class="sub" id="ov-sub" style="max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div>
     <div class="grid kpis" id="kpis"></div>
     <div class="grid two">
       <div class="card"><div class="card-h"><h3>Created vs resolved, by week</h3>
@@ -575,7 +575,10 @@ async function refresh() {
   $("#c-alerts").classList.toggle("hot", s.unread_alerts > 0);
   const sy = s.sync, el = $("#sync");
   el.classList.toggle("err", !!sy.last_sync_error);
-  $("#sync-t").textContent = sy.last_sync_error ? "Sync error, hover for details" : sy.last_sync_finished ? `Synced ${ago(sy.last_sync_finished)} ago` : "Waiting for first sync";
+  $("#sync-t").textContent = sy.last_sync_error ? "Sync error, hover for details"
+    : sy.in_progress != null ? `Syncing… ${sy.in_progress} tickets loaded`
+    : sy.last_sync_finished ? `Synced ${ago(sy.last_sync_finished)} ago` : "Waiting for first sync";
+  $("#ov-sub").innerHTML = `Projects: <b>${esc((sy.projects || []).join(", ") || "none yet")}</b> · <span title="${esc(sy.jql || "")}">filter: ${esc(sy.jql || "—")}</span>`;
   el.title = sy.last_sync_error || "";
   renderOverview(); renderBugs(); renderGitHub();
   if (view === "activity") renderActivity();

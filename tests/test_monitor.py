@@ -402,3 +402,18 @@ def test_github_client_paginates_and_reports_sso(monkeypatch):
         {"errors": [{"message": "Resource protected by organization SAML enforcement."}]}))
     with pytest.raises(GitHubError, match="authorize the token"):
         c.viewer()
+
+
+def test_interrupted_unfiltered_first_sync_is_cleaned_up(env):
+    """Rows from an unfinished sync under an old, broader filter get removed."""
+    s, conn, jira = env
+    conn.execute("INSERT INTO issues(key, project, status_category, created, updated) "
+                  "VALUES('HVII-2830','HVII','new','2017-06-01T00:00:00.000+0000','x')")
+    conn.commit()  # no last_sync_started and no jql_scope: unknown origin
+    s.jira.jql = "issuetype = Bug AND project in (HUMFE, HUM) AND created >= -60d"
+    jira.issues["HUM-1"] = issue("HUM-1")
+    stats = sync_once(conn, s, jira)
+    assert {r["key"] for r in conn.execute("SELECT key FROM issues")} == {"HUM-1"}
+    assert stats["removed"] == 1 and stats["alerts"] == 0
+    h = service.health(conn)
+    assert h["jql"] == s.jira.jql and h["in_progress"] is None and h["projects"] == ["HUM"]

@@ -22,6 +22,10 @@ def health(conn) -> dict:
         "last_sync_finished": get_state(conn, "last_sync_finished"),
         "last_sync_stats": json.loads(get_state(conn, "last_sync_stats", "null") or "null"),
         "last_sync_error": get_state(conn, "last_sync_error") or None,
+        "jql": get_state(conn, "jql_scope_pending") or get_state(conn, "jql_scope"),
+        "in_progress": get_state(conn, "sync_progress") or None,
+        "projects": [r[0] for r in conn.execute(
+            "SELECT project FROM issues GROUP BY project ORDER BY COUNT(*) DESC")],
     }
 
 

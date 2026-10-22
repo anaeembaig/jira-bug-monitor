@@ -95,6 +95,9 @@ def main(argv=None) -> int:
     from . import __version__
     from .dashboard import serve
     print(f"Jira Bug Monitor {__version__}")
+    print(f"Jira filter: {s.jira.jql}")
+    if not s.jira.retention_days:
+        print("Note: retention_days is not set, so old tickets are kept. Set it to 60 in config.toml.")
     httpd = serve(s)
     url = f"http://{s.dashboard.host}:{s.dashboard.port}"
     threading.Thread(target=httpd.serve_forever, daemon=True).start()

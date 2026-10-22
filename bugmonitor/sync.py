@@ -122,8 +122,14 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     base = settings.jira.jql
     # A changed JQL (new projects, new date range) triggers a full re-sync that also
     # removes tickets no longer in scope. No alerts fire for that re-sync.
-    scope_changed = last is not None and get_state(conn, "jql_scope") != base
+    prev_scope = get_state(conn, "jql_scope")
+    has_rows = conn.execute("SELECT 1 FROM issues LIMIT 1").fetchone() is not None
+    # Rows stored under a different (or unknown) JQL get cleaned up after a full re-sync.
+    scope_changed = has_rows and prev_scope != base
     first_sync = last is None or scope_changed
+    set_state(conn, "jql_scope_pending", base)
+    set_state(conn, "sync_progress", "0")
+    conn.commit()
 
     if first_sync:
         jql = (f"({base}) AND (statusCategory != Done OR updated >= -{settings.jira.backfill_days}d)"
@@ -181,7 +187,9 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
         d["urgency"] = urgency_score(d, settings)
         _upsert(conn, d, first_seen=now_iso())
         conn.commit()  # release the write lock after each ticket
-        if stats["seen"] % 50 == 0:
+        if stats["seen"] % 25 == 0:
+            set_state(conn, "sync_progress", str(stats["seen"]))
+            conn.commit()
             log.info("Synced %s tickets so far...", stats["seen"])
 
         # ---- alert rules
@@ -223,6 +231,7 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     set_state(conn, "last_sync_finished", now_iso())
     set_state(conn, "last_sync_stats", json.dumps(stats))
     set_state(conn, "jql_scope", base)
+    set_state(conn, "sync_progress", "")
     set_state(conn, "last_sync_error", "")
     conn.commit()
     log.info("Sync done: %s", stats)
