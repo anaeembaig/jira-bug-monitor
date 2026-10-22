@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jira Bug Monitor</title>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#fff;--ink:#1b1f24;--muted:#5f6b7a;--line:#e3e7ec;--accent:#2563eb;
+  --p-highest:#c62828;--p-high:#e8590c;--p-medium:#b7791f;--p-low:#2b6cb0;--p-lowest:#718096;
+  --ok:#2f855a;--chip:#eef1f5;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0f1217;--panel:#171b22;--ink:#e6e9ee;--muted:#9aa5b4;--line:#2a313c;--accent:#6ea0ff;
+  --p-highest:#ff6b6b;--p-high:#ff9a4d;--p-medium:#e3b341;--p-low:#6aa9ff;--p-lowest:#9aa5b4;
+  --ok:#5ccf8f;--chip:#222833;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+h1{font-size:18px;margin:0}
+.sync{color:var(--muted);font-size:12px}.sync.err{color:var(--p-highest)}
+main{padding:20px 24px;max-width:1400px;margin:0 auto;display:grid;gap:20px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.tile .n{font-size:28px;font-weight:650;font-variant-numeric:tabular-nums}
+.tile .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:20px}
+@media (max-width:960px){.grid2{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+section h2{font-size:14px;margin:0;padding:12px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--line)}
+input,select,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+button{cursor:pointer}button:hover{border-color:var(--accent)}
+.tablewrap{overflow-x:auto;max-height:640px;overflow-y:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-weight:600;font-size:12px;cursor:pointer}
+td.sum{white-space:normal;min-width:260px}
+tr.row:hover{background:var(--chip);cursor:pointer}
+.key{font-weight:600;color:var(--accent);text-decoration:none}
+.pri{display:inline-flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.bar{width:70px;height:6px;background:var(--chip);border-radius:3px;display:inline-block;vertical-align:middle;margin-right:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.chip{background:var(--chip);border-radius:999px;padding:1px 8px;font-size:12px}
+.muted{color:var(--muted)}
+.list{max-height:320px;overflow-y:auto}
+.item{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+.item:last-child{border-bottom:none}
+.item .grow{flex:1;min-width:0}
+.empty{padding:16px;color:var(--muted)}
+#drawer{position:fixed;inset:0 0 0 auto;width:min(560px,100%);background:var(--panel);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .2s;z-index:10;overflow-y:auto;padding:20px}
+#drawer.open{transform:none}
+#drawer h3{margin:0 0 4px}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:4px 12px;margin:14px 0}
+.est{background:var(--chip);border-radius:8px;padding:12px;margin:12px 0}
+.tl{border-left:2px solid var(--line);margin-left:6px;padding-left:14px}
+.tl div{margin-bottom:8px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Jira Bug Monitor</h1>
+  <span id="sync" class="sync">Loading…</span>
+</header>
+<main>
+  <div class="tiles" id="tiles"></div>
+  <div class="grid2">
+    <section>
+      <h2>Open Bugs <span class="muted" id="count"></span></h2>
+      <div class="filters">
+        <input id="q" placeholder="Search key or summary" size="24">
+        <select id="fproject"><option value="">All projects</option></select>
+        <select id="fpriority"><option value="">All priorities</option></select>
+        <select id="fstatus"><option value="">All statuses</option></select>
+        <label class="muted"><input type="checkbox" id="funassigned"> Unassigned</label>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr>
+          <th data-s="urgency">Urgency</th><th data-s="key">Key</th><th data-s="priority">Priority</th>
+          <th data-s="status">Status</th><th data-s="summary">Summary</th>
+          <th data-s="assignee">Assignee</th><th data-s="created">Age</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </section>
+    <div style="display:grid;gap:20px;align-content:start">
+      <section>
+        <h2>Alerts <button id="ackall">Mark all read</button></h2>
+        <div class="list" id="alerts"></div>
+      </section>
+      <section>
+        <h2>Being Worked On</h2>
+        <div class="list" id="active"></div>
+      </section>
+      <section>
+        <h2>Time Logged (7 Days)</h2>
+        <div class="list" id="work"></div>
+      </section>
+    </div>
+  </div>
+</main>
+<aside id="drawer"></aside>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const PRI = ["highest","high","medium","low","lowest"];
+const priColor = p => PRI.includes((p||"").toLowerCase()) ? `var(--p-${p.toLowerCase()})` : "var(--muted)";
+const priRank = p => { const i = PRI.indexOf((p||"").toLowerCase()); return i < 0 ? 0 : 5 - i; };
+const ago = ts => { if (!ts) return ""; const s = (Date.now() - new Date(ts)) / 1000;
+  if (s < 3600) return Math.max(1, Math.round(s/60)) + "m"; if (s < 86400) return Math.round(s/3600) + "h";
+  return Math.round(s/86400) + "d"; };
+const hrs = h => h == null ? "—" : h < 1 ? Math.round(h*60) + " min" : h < 48 ? h.toFixed(1) + " h" : (h/24).toFixed(1) + " days";
+let OPEN = [], sortKey = "urgency", sortDir = -1;
+
+async function j(url, opts) { const r = await fetch(url, opts); return r.json(); }
+
+function fillSelect(sel, values) {
+  const cur = sel.value, first = sel.options[0].outerHTML;
+  sel.innerHTML = first + values.map(v => `<option>${esc(v)}</option>`).join("");
+  sel.value = values.includes(cur) ? cur : "";
+}
+
+function renderRows() {
+  const q = $("#q").value.toLowerCase(), fp = $("#fproject").value, fpr = $("#fpriority").value,
+        fs = $("#fstatus").value, fu = $("#funassigned").checked;
+  let rows = OPEN.filter(r => (!q || (r.key + " " + r.summary).toLowerCase().includes(q))
+    && (!fp || r.project === fp) && (!fpr || r.priority === fpr) && (!fs || r.status === fs)
+    && (!fu || !r.assignee));
+  const val = r => sortKey === "priority" ? priRank(r.priority) : sortKey === "created" ? -new Date(r.created) : (r[sortKey] ?? "");
+  rows.sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);
+  $("#count").textContent = `${rows.length} shown`;
+  $("#rows").innerHTML = rows.map(r => `
+    <tr class="row" data-key="${esc(r.key)}">
+      <td><span class="bar"><i style="width:${r.urgency}%"></i></span>${Math.round(r.urgency)}</td>
+      <td><a class="key" href="${esc(r.url)}" target="_blank" onclick="event.stopPropagation()">${esc(r.key)}</a></td>
+      <td><span class="pri"><span class="dot" style="background:${priColor(r.priority)}"></span>${esc(r.priority || "None")}</span></td>
+      <td><span class="chip">${esc(r.status)}</span></td>
+      <td class="sum">${esc(r.summary)}${r.reopen_count ? ` <span class="chip">reopened ×${r.reopen_count}</span>` : ""}</td>
+      <td>${r.assignee ? esc(r.assignee) : '<span class="muted">Unassigned</span>'}</td>
+      <td class="muted">${ago(r.created)}</td>
+    </tr>`).join("") || `<tr><td colspan="7" class="empty">No open bugs match.</td></tr>`;
+}
+
+async function refresh() {
+  const [s, open, alerts, active, work] = await Promise.all([
+    j("/api/summary"), j("/api/open"), j("/api/alerts"), j("/api/active"), j("/api/work?days=7")]);
+  const tiles = [["Open bugs", s.open], ["New (24h)", s.new_last_24h], ["Unassigned", s.unassigned_open],
+                 ["Resolved (7d)", s.resolved_last_7d], ["Unread alerts", s.unread_alerts]];
+  $("#tiles").innerHTML = tiles.map(([l, n]) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  const sy = s.sync, el = $("#sync");
+  el.className = "sync" + (sy.last_sync_error ? " err" : "");
+  el.textContent = sy.last_sync_error ? `Sync error: ${sy.last_sync_error}`
+    : sy.last_sync_finished ? `Synced ${ago(sy.last_sync_finished)} ago · refreshes every 30s` : "Waiting for first sync…";
+
+  OPEN = open;
+  fillSelect($("#fproject"), [...new Set(open.map(r => r.project))].sort());
+  fillSelect($("#fpriority"), [...new Set(open.map(r => r.priority).filter(Boolean))].sort((a,b) => priRank(b) - priRank(a)));
+  fillSelect($("#fstatus"), [...new Set(open.map(r => r.status))].sort());
+  renderRows();
+
+  $("#alerts").innerHTML = alerts.map(a => `
+    <div class="item"><span class="dot" style="margin-top:6px;background:${priColor(a.priority)}"></span>
+      <div class="grow"><div>${esc(a.message)}</div>
+      <div class="muted" style="font-size:12px">${ago(a.ts)} ago · ${esc((a.channels||[]).join(", "))}</div></div>
+      <button data-ack="${a.id}">Read</button></div>`).join("") || `<div class="empty">No unread alerts.</div>`;
+  $("#active").innerHTML = active.map(a => `
+    <div class="item"><div class="grow"><a class="key" href="#" data-open="${esc(a.key)}">${esc(a.key)}</a> ${esc(a.summary || "")}
+      <div class="muted" style="font-size:12px">${esc(a.actor || "")} · ${esc(a.session || "")} · started ${ago(a.since)} ago</div></div></div>`).join("")
+    || `<div class="empty">Nothing in progress. Log work from any Claude session.</div>`;
+  $("#work").innerHTML = work.map(w => `
+    <div class="item"><div class="grow"><a class="key" href="#" data-open="${esc(w.key)}">${esc(w.key)}</a> ${esc(w.summary || "")}</div>
+      <strong>${hrs(w.hours)}</strong></div>`).join("") || `<div class="empty">No time logged yet.</div>`;
+}
+
+async function openTicket(key) {
+  const t = await j("/api/ticket/" + encodeURIComponent(key));
+  const d = $("#drawer");
+  if (t.error) { d.innerHTML = `<button onclick="closeDrawer()">Close</button><p>${esc(t.error)}</p>`; d.classList.add("open"); return; }
+  const e = t.estimate || {};
+  const byStatus = Object.entries(t.hours_by_status || {}).map(([k, v]) => `${esc(k)}: ${hrs(v)}`).join(" · ");
+  d.innerHTML = `
+    <button onclick="closeDrawer()" style="float:right">Close</button>
+    <h3><a class="key" href="${esc(t.url)}" target="_blank">${esc(t.key)}</a></h3>
+    <div>${esc(t.summary)}</div>
+    <div class="kv">
+      <span class="muted">Status</span><span>${esc(t.status)}</span>
+      <span class="muted">Priority</span><span class="pri"><span class="dot" style="background:${priColor(t.priority)}"></span>${esc(t.priority || "None")}</span>
+      <span class="muted">Urgency</span><span>${Math.round(t.urgency)} / 100</span>
+      <span class="muted">Assignee</span><span>${esc(t.assignee || "Unassigned")}</span>
+      <span class="muted">Components</span><span>${esc((t.components||[]).join(", ") || "—")}</span>
+      <span class="muted">Created</span><span>${esc(new Date(t.created).toLocaleString())}</span>
+      <span class="muted">Time in status</span><span>${byStatus || "—"}</span>
+      <span class="muted">Your logged time</span><span>${hrs((t.local_work_minutes||0)/60)}</span>
+    </div>
+    <div class="est"><strong>Fix estimate</strong><div>${esc(e.summary || e.error || "Not available")}</div></div>
+    <strong>Timeline</strong>
+    <div class="tl">${(t.timeline||[]).map(ev => `<div><span class="muted">${esc(new Date(ev.ts).toLocaleString())}</span><br>
+      <strong>${esc(ev.kind)}</strong> ${ev.from_val ? esc(ev.from_val) + " → " : ""}${esc(ev.to_val || "")}
+      ${ev.minutes ? `(${ev.minutes} min)` : ""} <span class="muted">${esc(ev.author || "")}</span></div>`).join("") || "<div class='muted'>No history yet.</div>"}</div>`;
+  d.classList.add("open");
+}
+function closeDrawer() { $("#drawer").classList.remove("open"); }
+
+document.addEventListener("click", async ev => {
+  const row = ev.target.closest("tr.row"); if (row) return openTicket(row.dataset.key);
+  const op = ev.target.closest("[data-open]"); if (op) { ev.preventDefault(); return openTicket(op.dataset.open); }
+  const ack = ev.target.closest("[data-ack]");
+  if (ack) { await j(`/api/alerts/${ack.dataset.ack}/ack`, {method: "POST"}); return refresh(); }
+  const th = ev.target.closest("th[data-s]");
+  if (th) { const k = th.dataset.s; sortDir = sortKey === k ? -sortDir : -1; sortKey = k; renderRows(); }
+});
+$("#ackall").onclick = async () => { await j("/api/alerts/all/ack", {method: "POST"}); refresh(); };
+["#q", "#fproject", "#fpriority", "#fstatus", "#funassigned"].forEach(s => $(s).addEventListener("input", renderRows));
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+refresh(); setInterval(refresh, 30000);
+</script>
+</body>
+</html>
