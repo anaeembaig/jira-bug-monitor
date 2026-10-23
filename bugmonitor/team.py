@@ -192,12 +192,13 @@ def qa(conn, settings: Settings) -> dict:
     wanted = {s.lower() for s in settings.team.qa_statuses}
     rows = [r for r in _rows(conn, "in_team=1 OR in_mine=1") if (r["status"] or "").lower() in wanted]
     links = pr_links(conn)
-    deployed = _deployed_envs(conn)
+    from .deployments import environments_for_tickets
+    deployed = environments_for_tickets(conn)
     out = []
     for r in rows:
         prs = links.get(r["key"], [])
         merged = [p for p in prs if p["state"] == "MERGED"]
-        envs = sorted({e for p in merged for e in deployed.get((p["repo"], p["number"]), [])})
+        envs = sorted(deployed.get(r["key"], []))
         ready = bool(merged) and not any(p["state"] == "OPEN" for p in prs)
         out.append(dict(_mini(r, now, conn, settings), prs=prs, merged=bool(merged), environments=envs,
                         testable="Deployed" if envs else "Merged, not deployed yet" if ready

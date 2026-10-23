@@ -218,6 +218,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <button class="tab" role="tab" data-view="mine">My Tickets <span class="count num" id="c-mine">0</span></button>
       <button class="tab" role="tab" data-view="team">Team <span class="count num" id="c-team">0</span></button>
       <button class="tab" role="tab" data-view="time">Time Log <span class="count num" id="c-time">0h</span></button>
+      <button class="tab" role="tab" data-view="deploys">Deployments <span class="count num" id="c-deploys">0</span></button>
       <button class="tab" role="tab" data-view="bugs">Bugs <span class="count num" id="c-bugs">0</span></button>
       <button class="tab" role="tab" data-view="github">GitHub <span class="count num" id="c-gh">0</span></button>
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
@@ -281,6 +282,14 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
   <section class="view" id="v-time">
     <div class="h-row"><h2>Time Log</h2><div class="seg" id="time-seg"><button data-v="me" aria-pressed="true">Me</button><button data-v="team" aria-pressed="false">Team</button></div></div>
     <div id="time-body"></div>
+  </section>
+
+  <!-- ================= DEPLOYMENTS ================= -->
+  <section class="view" id="v-deploys">
+    <div class="h-row"><h2>Deployments</h2><div class="seg" id="dep-seg">
+      <button data-v="all" aria-pressed="true">All</button><button data-v="mine" aria-pressed="false">My tickets</button>
+      <button data-v="prod" aria-pressed="false">Production</button><button data-v="failed" aria-pressed="false">Failed and rollbacks</button></div></div>
+    <div id="dep-body"></div>
   </section>
 
   <!-- ================= BUGS ================= -->
@@ -503,7 +512,7 @@ document.addEventListener("mousemove", e => {
 });
 
 /* ---------------------------------------------------------------- state */
-let teamView = store.get("bm-team") || "board", CONF = {}, timeView = "me";
+let teamView = store.get("bm-team") || "board", CONF = {}, timeView = "me", depView = "all", DEPS = null;
 let OV = null, ISSUES = [], GH = {summary: null, prs: [], branches: []}, MINE = null, mineView = store.get("bm-mine") || "board";
 let bScope = "open", bSort = {k: "urgency", d: -1}, ghFilter = "mine";
 let view = store.get("bm-view") || "overview";
@@ -624,6 +633,78 @@ async function renderTeam() {
   }
 }
 
+/* ---------------------------------------------------------------- deployments */
+const DEP = {SUCCESS: ["good", "Succeeded"], ACTIVE: ["good", "Live"], INACTIVE: ["neutral", "Replaced"], FAILURE: ["critical", "Failed"],
+  ERROR: ["critical", "Error"], IN_PROGRESS: ["warning", "Deploying"], QUEUED: ["warning", "Queued"], PENDING: ["warning", "Pending"],
+  WAITING: ["warning", "Waiting for approval"], CANCELLED: ["neutral", "Cancelled"], SKIPPED: ["neutral", "Skipped"], TIMED_OUT: ["critical", "Timed out"],
+  STARTUP_FAILURE: ["critical", "Failed to start"], REQUESTED: ["warning", "Requested"]};
+const depBadge = (st, rb) => rb ? stBadge("serious", "Rollback") : stBadge(...(DEP[st] || ["neutral", (st || "unknown").toLowerCase()]));
+const dur = sec => sec == null ? "—" : sec < 90 ? `${Math.round(sec)}s` : sec < 5400 ? `${Math.round(sec / 60)} min` : `${(sec / 3600).toFixed(1)} h`;
+
+async function renderDeploys() {
+  document.querySelectorAll("#dep-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === depView));
+  const body = $("#dep-body");
+  if (!CONF.github_enabled) { body.innerHTML = '<div class="banner">Deployments come from GitHub. Turn on GitHub in <code>bugmonitor init</code>.</div>'; return; }
+  DEPS = await j("/api/deployments" + (depView === "mine" ? "?mine=1" : ""));
+  const feed = DEPS.feed.filter(d => depView === "prod" ? d.production : depView === "failed" ? (d.rollback || ["FAILURE", "ERROR"].includes(d.state)) : true);
+  // A deploy and the pipeline running it share a commit: show the pipeline (it has step progress).
+  const runShas = new Set(DEPS.running.filter(r => r.kind === "run").map(r => r.repo + r.sha));
+  const running = DEPS.running.filter(r => r.kind === "run" || !runShas.has(r.repo + r.sha));
+  body.innerHTML = `
+    ${running.length ? `<div class="card" style="margin-bottom:16px"><div class="card-h"><h3>Running now</h3></div><div class="card-b"><div class="list">
+      ${running.map(r => { const p = r.progress; return `<div class="li"><div class="grow"><div class="t1">${esc(r.repo.split("/")[1])} · ${esc(r.environment || r.workflow)}
+        ${r.description ? `<span class="muted">${esc(r.description)}</span>` : ""}</div>
+        <div class="t2">${depBadge(r.state)} started by ${esc(r.creator || "?")} ${ago(r.created)} ago${p ? ` · step ${p.done} of ${p.total}${p.current ? `: ${esc(p.current)}` : ""}` : ""}</div>
+        ${p ? `<div class="prog" style="margin-top:6px"><i style="width:${p.total ? p.done / p.total * 100 : 0}%;background:var(--bar)"></i></div>` : ""}</div>
+        ${r.url ? `<a href="${esc(r.url)}" target="_blank">Logs</a>` : ""}</div>`; }).join("")}</div></div></div>` : ""}
+    <div class="card"><div class="card-h"><h3>Environments</h3><span class="sub">latest deploy to each</span></div>
+      <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Environment</th><th class="nosort">Repo</th><th class="nosort">State</th>
+        <th class="nosort">Version</th><th class="nosort">Deployed by</th><th class="nosort">When</th><th class="nosort">Took</th><th class="nosort">Tickets</th></tr></thead><tbody>
+      ${DEPS.environments.map(e => `<tr data-dep="${esc(e.id)}"><td><b>${esc(e.environment)}</b>${e.production ? ' <span class="chip">production</span>' : ""}</td>
+        <td class="muted">${esc(e.repo.split("/")[1])}</td><td>${depBadge(e.state, e.rollback)}</td>
+        <td class="num"><span class="path">${esc((e.sha || "").slice(0, 7))}</span> ${esc(e.ref || "")}</td><td>${esc(e.creator || "")}</td>
+        <td class="muted">${ago(e.created)} ago</td><td class="num muted">${dur(e.duration_s)}</td>
+        <td><div class="chips">${(e.tickets || []).slice(0, 6).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}${(e.tickets || []).length > 6 ? `<span class="chip">+${e.tickets.length - 6}</span>` : ""}</div></td></tr>`).join("")
+        || '<tr><td colspan="8" class="empty">No deployments found in your repos.</td></tr>'}</tbody></table></div></div>
+    <div class="card mt"><div class="card-h"><h3>Recent deployments</h3><span class="sub">${feed.length} shown</span></div>
+      <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">When</th><th class="nosort">Environment</th><th class="nosort">State</th>
+        <th class="nosort">By</th><th class="nosort">Shipped</th><th class="nosort">Took</th><th class="nosort"></th></tr></thead><tbody>
+      ${feed.map(d => `<tr data-dep="${esc(d.id)}"><td class="muted">${ago(d.created)} ago</td>
+        <td><b>${esc(d.environment)}</b> <span class="muted">${esc(d.repo.split("/")[1])}@${esc((d.sha || "").slice(0, 7))}</span></td>
+        <td>${depBadge(d.state, d.rollback)}</td><td>${esc(d.creator || "")}</td>
+        <td class="wrap">${d.rollback ? `<span class="muted">Rolled back to an older version (from ${esc((d.previous_sha || "").slice(0, 7))})</span>`
+          : d.commits == null ? '<span class="muted">First deploy tracked</span>' : d.commits === 0 ? '<span class="muted">Same version redeployed</span>'
+          : `${d.commits} commit${d.commits === 1 ? "" : "s"}`}
+          <div class="chips" style="margin-top:4px">${(d.tickets || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop ${d.mine && d.mine.includes(k) ? 'style="border-color:var(--accent)"' : ""}>${esc(k)}</a>`).join("")}</div></td>
+        <td class="num muted">${dur(d.duration_s)}</td><td>${d.log_url ? `<a href="${esc(d.log_url)}" target="_blank" data-stop>Logs</a>` : ""}</td></tr>`).join("")
+        || '<tr><td colspan="7" class="empty">Nothing here.</td></tr>'}</tbody></table></div></div>`;
+}
+
+function openDeploy(id) {
+  const all = [...(DEPS?.feed || []), ...(DEPS?.environments || [])], d = all.find(x => x.id === id), el = $("#drawer");
+  if (!d) return;
+  el.innerHTML = `<div class="dr-h"><div style="flex:1;min-width:0"><span class="key">${esc(d.repo)}</span>
+      <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(d.environment)} · ${esc((d.sha || "").slice(0, 7))}</div></div><button class="btn" data-close>Close</button></div>
+    <div class="dr-b">
+      <div class="kv"><span class="k">State</span><span>${depBadge(d.state, d.rollback)}</span>
+        <span class="k">Deployed by</span><span>${esc(d.creator || "—")}</span>
+        <span class="k">Started</span><span>${esc(new Date(d.created).toLocaleString())}</span>
+        <span class="k">Took</span><span>${dur(d.duration_s)}</span>
+        <span class="k">Ref</span><span>${esc(d.ref || "—")}</span>
+        <span class="k">Previous version</span><span class="path">${esc((d.previous_sha || "none tracked").slice(0, 12))}</span>
+        <span class="k">Commits</span><span>${d.commits ?? "—"} by ${esc((d.authors || []).join(", ") || "—")}</span>
+        <span class="k">Links</span><span>${d.log_url ? `<a href="${esc(d.log_url)}" target="_blank">Logs</a> ` : ""}${d.environment_url ? `<a href="${esc(d.environment_url)}" target="_blank">Open environment</a> ` : ""}<a href="${esc(d.url)}" target="_blank">GitHub</a></span></div>
+      ${d.rollback ? `<div class="est">${stBadge("serious", "Rollback")} This deploy went back to an older version than what was there before.</div>` : ""}
+      <div class="sect"><h4>Progress</h4><div class="tl">${(d.statuses || []).map(st => `<div><div class="when">${esc(new Date(st.at).toLocaleString())}${st.by ? " · " + esc(st.by) : ""}</div>
+        <div>${depBadge(st.state)} ${esc(st.description || "")}</div></div>`).join("") || '<div class="muted">No status updates.</div>'}</div></div>
+      <div class="sect"><h4>Tickets shipped</h4>${(d.ticket_details || []).map(t => `<div class="li" data-open="${esc(t.key)}" style="cursor:pointer"><div class="grow">
+        <div class="t1"><span class="key">${esc(t.key)}</span> ${esc(t.summary || "")}</div><div class="t2">${t.status ? `<span class="pill">${esc(t.status)}</span> ` : ""}${esc(t.assignee || "")}</div></div></div>`).join("")
+        || '<div class="muted">No Jira keys found in the shipped commits.</div>'}</div>
+      <div class="sect"><h4>Pull requests</h4><div class="chips">${(d.prs || []).map(n => `<span class="chip" data-pr="${esc(d.repo)}|${n}" style="cursor:pointer">#${n}</span>`).join("") || '<span class="muted">—</span>'}</div></div>
+    </div>`;
+  el.classList.add("on"); $("#scrim").classList.add("on");
+}
+
 /* ---------------------------------------------------------------- time log */
 function dayBars(el, days, target) {
   const data = days.slice().reverse(), W = el.clientWidth || 600, H = 180, L = 30, R = 8, T = 10, B = 24;
@@ -663,7 +744,7 @@ async function renderTime() {
   body.innerHTML = `
     <div class="grid kpis">${[["Logged today", `${today.logged_hours}h`, `of ${today.target_hours}h target`],
       ["This week", `${d.week.logged}h`, `of ${d.week.target}h so far`],
-      ["Tracked in Claude today", `${today.tracked_hours}h`, "from log_work"],
+      ["Tracked in Claude today", hrs(today.tracked_hours), "from log_work"],
       ["Worked on, not logged", today.unlogged_tickets.length, today.unlogged_tickets.join(", ") || "all logged"],
       ["Tickets today", today.tickets.length, ""],
       ["Short days", d.days.filter(x => x.workday && x.short_hours > 0 && x.date !== today.date).length, `in the last ${d.days.length} days`]]
@@ -673,7 +754,7 @@ async function renderTime() {
         <span class="d">${x.weekday} ${fmtDate(x.date)}</span>
         <span class="bar"><i style="width:${Math.min(100, x.target_hours ? x.logged_hours / x.target_hours * 100 : (x.logged_hours ? 100 : 0))}%"></i></span>
         <span class="num ${x.short_hours > 0 ? "low" : ""}">${x.logged_hours}h${x.target_hours ? ` / ${x.target_hours}h` : ""}</span>
-        ${x.tracked_hours ? `<span class="sub">${x.tracked_hours}h tracked</span>` : ""}
+        ${x.tracked_hours ? `<span class="sub">${hrs(x.tracked_hours)} tracked</span>` : ""}
         ${x.unlogged_tickets.length ? `<span class="st warning">${ICON.warning}${x.unlogged_tickets.length} not logged</span>` : ""}
         <span class="sub" style="margin-left:auto">${x.tickets.length} ticket${x.tickets.length === 1 ? "" : "s"}</span></summary>
       ${x.tickets.length ? `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Ticket</th><th class="nosort">Status</th>
@@ -682,7 +763,7 @@ async function renderTime() {
             ${t.comments.length ? `<div class="sub">${esc(t.comments.join(" · "))}</div>` : ""}</td>
           <td>${t.status ? `<span class="pill">${esc(t.status)}</span>` : ""}</td>
           <td class="num ${!t.logged_hours ? "muted" : ""}">${t.logged_hours ? t.logged_hours + "h" : "—"}</td>
-          <td class="num muted">${t.tracked_hours ? t.tracked_hours.toFixed(1) + "h" : "—"}</td>
+          <td class="num muted">${t.tracked_hours ? hrs(t.tracked_hours) : "—"}</td>
           <td><div class="act">${t.activity.map(a => `<span class="chip">${esc(a)}</span>`).join("") || '<span class="muted">—</span>'}</div></td>
           ${d.can_write ? `<td><button class="btn" data-logtime="${esc(t.key)}|${x.date}|${t.tracked_hours || ""}" data-stop>Log time</button></td>` : ""}</tr>`).join("")}
         </tbody></table></div>` : '<div class="empty">No time or activity.</div>'}</details>`).join("")}</div>`;
@@ -843,7 +924,8 @@ orgs = ["tcp-software"]      # only PRs in these orgs</pre>
 /* ---------------------------------------------------------------- activity */
 async function renderActivity() {
   const [alerts, active, work] = await Promise.all([j("/api/alerts"), j("/api/active"), j("/api/work?days=7")]);
-  const sev = a => ["my_status", "assigned_to_me", "pr_comment", "review_requested"].includes(a.kind) ? "neutral"
+  const sev = a => ["my_status", "assigned_to_me", "pr_comment", "review_requested", "mentioned", "timelog"].includes(a.kind) ? "neutral"
+    : ["deploy_failed", "escalation", "sync_failing"].includes(a.kind) ? "critical" : ["rollback", "stuck"].includes(a.kind) ? "serious" : a.kind === "deployed" ? "good"
     : a.kind === "merge_conflicts" ? "critical" : a.kind === "checks_failed" ? "critical" : a.kind === "changes_requested" ? "serious"
     : a.kind === "pr_approved" || a.kind === "pr_merged" ? "good" : PRI_CLS[(a.priority || "").toLowerCase()] || "neutral";
   $("#alerts").innerHTML = alerts.map(a => `
@@ -892,6 +974,10 @@ async function openTicket(key) {
               · ${p.comments} comment${p.comments === 1 ? "" : "s"}${p.unresolved ? `, ${p.unresolved} unresolved` : ""}</div></div>${prBadge(p.status)}</div>`).join("")}
           ${(t.branches || []).map(b => `<div class="li"><div class="grow"><a href="${esc(b.url)}" target="_blank">${esc(b.name)}</a> <span class="muted">${esc(b.repo)}</span></div>${checkBadge(b.checks)}</div>`).join("")}
           ${!(t.prs || []).length && !(t.branches || []).length ? '<div class="muted">None linked. Put the ticket key in the branch name or PR title.</div>' : ""}</div>
+        <div class="sect"><h4>Deployments</h4>${(t.deployments || []).map(d => `<div class="li"><div class="grow"><b>${esc(d.environment)}</b>
+          <span class="muted">${esc(d.repo.split("/")[1])}@${esc((d.sha || "").slice(0, 7))} by ${esc(d.creator || "?")}, ${ago(d.created)} ago</span></div>${depBadge(d.state, d.rollback)}</div>`).join("")
+          || '<div class="muted">Not deployed anywhere yet (or no Jira key in the shipped commits).</div>'}</div>
+        ${(t.comments || []).length ? `<div class="sect"><h4>Recent Jira comments</h4><div class="convo">${t.comments.map(c => `<div class="cm"><div class="cm-h"><b>${esc(c.author || "")}</b><span>${ago(c.created)} ago</span></div><div class="cm-b">${esc(c.body)}</div></div>`).join("")}</div></div>` : ""}
         <div class="sect"><h4>Timeline</h4><div class="tl">${(t.timeline || []).slice().reverse().map(ev => `<div>
           <div class="when">${esc(new Date(ev.ts).toLocaleString())} ${ev.author ? "· " + esc(ev.author) : ""}</div>
           <div><b>${esc(ev.kind.replace("work:", "work · "))}</b> ${ev.from_val ? esc(ev.from_val) + " → " : ""}${esc(ev.to_val || "")} ${ev.minutes ? `<span class="muted">(${ev.minutes} min)</span>` : ""}</div></div>`).join("") || '<div class="muted">No history yet.</div>'}</div></div>
@@ -974,6 +1060,8 @@ async function refresh() {
   renderOverview(); renderMine(); renderBugs(); renderGitHub();
   if (view === "team") renderTeam();
   if (view === "time") renderTime();
+  if (view === "deploys") renderDeploys();
+  if (CONF.github_enabled) j("/api/deployments").then(d => { $("#c-deploys").textContent = d.running.length; $("#c-deploys").classList.toggle("hot", d.running.length > 0); }).catch(() => {});
   j("/api/timelog?days=1").then(t => { $("#c-time").textContent = `${t.days[0].logged_hours}h`; }).catch(() => {});
   if (view === "activity") renderActivity();
 }
@@ -986,6 +1074,7 @@ function show(v) {
   if (v === "activity") renderActivity();
   if (v === "team") renderTeam();
   if (v === "time") renderTime();
+  if (v === "deploys") renderDeploys();
 }
 
 document.addEventListener("click", async ev => {
@@ -1013,6 +1102,8 @@ document.addEventListener("click", async ev => {
   const sb = ev.target.closest("#b-scope button");
   if (sb) { bScope = sb.dataset.v; document.querySelectorAll("#b-scope button").forEach(b => b.setAttribute("aria-pressed", b === sb)); return renderBugs(); }
   const ts_ = ev.target.closest("#time-seg button"); if (ts_) { timeView = ts_.dataset.v; return renderTime(); }
+  const ds = ev.target.closest("#dep-seg button"); if (ds) { depView = ds.dataset.v; return renderDeploys(); }
+  const dr = ev.target.closest("tr[data-dep]"); if (dr && !ev.target.closest("[data-open]") && !ev.target.closest("a")) return openDeploy(dr.dataset.dep);
   const tb = ev.target.closest("#team-seg button"); if (tb) { teamView = tb.dataset.v; store.set("bm-team", teamView); return renderTeam(); }
   const mb = ev.target.closest("#mine-seg button"); if (mb) { mineView = mb.dataset.v; store.set("bm-mine", mineView); return renderMine(); }
   const gb = ev.target.closest("#gh-seg button"); if (gb) { ghFilter = gb.dataset.v; return renderGitHub(); }

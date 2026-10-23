@@ -71,6 +71,12 @@ def make_handler(settings: Settings):
                     return self._json(getattr(team, m.group(1))(conn, settings))
                 if u.path == "/api/config":
                     return self._json(_public_config(settings))
+                if u.path == "/api/deployments":
+                    from .deployments import overview
+                    return self._json(overview(conn, settings, q.get("mine") == "1"))
+                if u.path == "/api/deployments/dora":
+                    from .deployments import dora
+                    return self._json(dora(conn, settings, int(q.get("days", 30))))
                 if u.path == "/api/timelog":
                     from .timelog import timesheet
                     return self._json(timesheet(conn, settings, int(q.get("days", 0)) or None, q.get("person")))

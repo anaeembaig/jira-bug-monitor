@@ -130,7 +130,7 @@ class Route:
     webhook: str = ""
     projects: list[str] = field(default_factory=list)  # blank = all projects
     events: list[str] = field(default_factory=lambda: ["new_bug", "priority_raised", "reopened",
-                                                       "escalation", "stuck"])
+                                                       "escalation", "stuck", "deployment"])
     min_priority: str = ""          # blank = use alerts.external_min_priority
     digest: bool = False            # also post the daily team digest and weekly report here
     mention_assignee: bool = True

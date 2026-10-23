@@ -63,6 +63,21 @@ query($owner: String!, $name: String!) {
 """
 
 
+DEPLOYMENTS_Q = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    deployments(first: 40, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        id databaseId environment state createdAt updatedAt description task commitOid
+        ref { name } creator { login }
+        statuses(first: 20) { nodes { state description createdAt logUrl environmentUrl creator { login } } }
+      }
+    }
+  }
+}
+"""
+
+
 class GitHubError(RuntimeError):
     pass
 
@@ -122,6 +137,29 @@ class GitHubClient:
                 break
             after = res["pageInfo"]["endCursor"]
         return out
+
+    def rest(self, path: str, params: dict | None = None) -> dict:
+        r = self.s.get(f"https://api.github.com{path}", params=params, timeout=self.timeout)
+        if r.status_code == 404:
+            return {}
+        if not r.ok:
+            raise GitHubError(f"GitHub {r.status_code} on {path}: {r.text[:200]}")
+        return r.json()
+
+    def deployments(self, repo: str) -> list[dict]:
+        owner, name = repo.split("/", 1)
+        data = self.query(DEPLOYMENTS_Q, {"owner": owner, "name": name}).get("repository") or {}
+        return ((data.get("deployments") or {}).get("nodes") or [])
+
+    def compare(self, repo: str, base: str, head: str) -> dict:
+        return self.rest(f"/repos/{repo}/compare/{base}...{head}", {"per_page": 250})
+
+    def workflow_runs(self, repo: str, since: str) -> list[dict]:
+        return (self.rest(f"/repos/{repo}/actions/runs", {"per_page": 30, "created": f">={since}"})
+                .get("workflow_runs") or [])
+
+    def run_jobs(self, repo: str, run_id: int) -> list[dict]:
+        return self.rest(f"/repos/{repo}/actions/runs/{run_id}/jobs", {"per_page": 50}).get("jobs") or []
 
     def branches(self, repo: str) -> dict:
         owner, name = repo.split("/", 1)

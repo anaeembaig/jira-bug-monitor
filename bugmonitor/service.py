@@ -106,6 +106,10 @@ def get_ticket(conn, key: str) -> dict:
     issue["branches"] = [row_to_dict(r) for r in conn.execute(
         "SELECT repo, name, url, checks, pr_number, pr_state, committed FROM github_branches "
         "WHERE jira_keys LIKE ?", (f'%"{key}"%',))]
+    from .deployments import for_ticket
+    issue["deployments"] = for_ticket(conn, key)
+    issue["comments"] = [dict(r) for r in conn.execute(
+        "SELECT author, created, body FROM jira_comments WHERE key=? ORDER BY created DESC LIMIT 20", (key,))]
     issue["alerts"] = [dict(r) for r in conn.execute(
         "SELECT id, ts, kind, message, acknowledged FROM alerts WHERE key=? ORDER BY ts DESC", (key,))]
     return issue

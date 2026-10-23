@@ -116,6 +116,31 @@ def my_tickets(status: str | None = None) -> dict:
 
 
 @mcp.tool()
+def deployments(mine_only: bool = False) -> dict:
+    """Deployments to every environment: latest per environment, recent deploys with who deployed,
+    when, state and status history, duration, logs, and the Jira tickets, PRs, and commits each
+    shipped; plus deploy pipelines running now with step progress. mine_only = only deploys
+    that include your tickets."""
+    from .deployments import overview
+    return overview(conn, settings, mine_only)
+
+
+@mcp.tool()
+def ticket_deployments(key: str) -> list[dict]:
+    """Where a Jira ticket has been deployed: environment, when, by whom, state, logs."""
+    from .deployments import for_ticket
+    return for_ticket(conn, key.strip().upper())
+
+
+@mcp.tool()
+def delivery_metrics(days: int = 30) -> dict:
+    """Production delivery metrics (DORA): deploys per week, change failure rate, lead time
+    from merge to production, and time to restore after a failed deploy."""
+    from .deployments import dora
+    return dora(conn, settings, days)
+
+
+@mcp.tool()
 def my_timesheet(days: int = 7, person: str | None = None) -> dict:
     """Day-by-day time: hours logged in Jira per ticket, time tracked from Claude sessions,
     and what you did on each ticket (status changes, comments, PRs). Shows short days against

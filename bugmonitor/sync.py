@@ -453,9 +453,16 @@ def sync_github_safe(conn, settings: Settings, alerter: Alerter | None = None) -
         return None
     from .github_client import GitHubClient, resolve_token
     try:
+        from .deployments import sync_deployments
         from .github_sync import sync_github
         client = GitHubClient(resolve_token(settings.github.token))
-        return sync_github(conn, settings, client, alerter)
+        out = sync_github(conn, settings, client, alerter)
+        try:
+            out["deployments"] = sync_deployments(conn, settings, client, alerter)
+        except Exception as e:
+            log.warning("Deployment sync failed: %s", e)
+            out["deployments"] = {"error": str(e)}
+        return out
     except Exception as e:
         conn.rollback()
         set_state(conn, "github_last_error", f"{now_iso()} {e}")

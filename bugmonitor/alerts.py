@@ -28,6 +28,9 @@ TITLES = {
     "escalation": "Escalation",
     "sync_failing": "Bug Monitor can't sync",
     "timelog": "Time log",
+    "deployed": "Deployed",
+    "deploy_failed": "Deploy failed",
+    "rollback": "Rollback",
     "review_requested": "Review requested",
     "checks_failed": "Checks failing",
     "pr_approved": "PR approved",
@@ -135,11 +138,14 @@ CARD_COLOR = {
     "checks_failed": "Attention", "merge_conflicts": "Attention", "changes_requested": "Warning",
     "pr_approved": "Good", "pr_merged": "Good", "pr_comment": "Default",
     "mentioned": "Accent", "stuck": "Warning", "escalation": "Attention", "sync_failing": "Attention",
+    "deployed": "Good", "deploy_failed": "Attention", "rollback": "Warning",
 }
 
 
 # Events that go to team channels ([[routes]]); everything else is personal.
-TEAM_EVENTS = {"new_bug", "priority_raised", "reopened", "escalation", "stuck"}
+TEAM_EVENTS = {"new_bug", "priority_raised", "reopened", "escalation", "stuck",
+               "deployed", "deploy_failed", "rollback"}
+DEPLOY_KINDS = {"deployed", "deploy_failed", "rollback"}  # all match a route's "deployment" event
 
 
 def _hhmm(text: str):
@@ -169,7 +175,7 @@ class Alerter:
         return self.s.at_least(priority, self.a.external_min_priority)
 
     def _urgent(self, kind: str, issue: dict) -> bool:
-        return kind in ("escalation", "sync_failing") or (
+        return kind in ("escalation", "sync_failing", "deploy_failed", "rollback") or (
             kind in ("new_bug", "reopened", "priority_raised") and self.s.is_high(issue.get("priority")))
 
     def _routes_for(self, issue: dict, kind: str, route: str | None) -> list:
@@ -178,14 +184,15 @@ class Alerter:
             return [r] if r and r.webhook else []
         if kind not in TEAM_EVENTS:
             return []
-        project = issue.get("project") or (issue.get("key") or "").split("-")[0]
+        projects = set(issue.get("projects") or [issue.get("project") or (issue.get("key") or "").split("-")[0]])
         out = []
         for r in self.s.routes:
-            if not r.webhook or kind not in r.events:
+            event = "deployment" if kind in DEPLOY_KINDS else kind
+            if not r.webhook or event not in r.events:
                 continue
-            if r.projects and project not in [p.upper() for p in r.projects]:
+            if r.projects and not projects & {p.upper() for p in r.projects}:
                 continue
-            if kind not in ("escalation", "stuck") and not self.s.at_least(
+            if kind not in {"escalation", "stuck"} | DEPLOY_KINDS and not self.s.at_least(
                     issue.get("priority"), r.min_priority or self.a.external_min_priority):
                 continue
             out.append(r)

@@ -153,6 +153,12 @@ MIGRATIONS = {
     "github_prs": [("merge_state", "TEXT"), ("labels", "TEXT"), ("approvals", "INTEGER"),
                    ("pending_reviewers", "TEXT"), ("comments_count", "INTEGER"),
                    ("unresolved_threads", "INTEGER"), ("details", "TEXT")],
+    "deployments": [("kind", "TEXT DEFAULT 'deployment'"), ("creator", "TEXT"), ("ref", "TEXT"),
+                    ("description", "TEXT"), ("statuses", "TEXT"), ("log_url", "TEXT"),
+                    ("environment_url", "TEXT"), ("commits", "INTEGER"), ("tickets", "TEXT"),
+                    ("prs", "TEXT"), ("authors", "TEXT"), ("previous_sha", "TEXT"),
+                    ("rollback", "INTEGER DEFAULT 0"), ("duration_s", "REAL"), ("progress", "TEXT"),
+                    ("run_id", "INTEGER"), ("workflow", "TEXT")],
 }
 
 
@@ -182,7 +188,8 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
         return None
     d = dict(row)
     for k in ("components", "labels", "channels", "relations", "jira_keys", "pending_reviewers",
-              "details", "sprint_ids", "fix_versions", "mentions"):
+              "details", "sprint_ids", "fix_versions", "mentions", "statuses", "tickets",
+              "prs", "authors", "progress"):
         if k in d and isinstance(d[k], str):
             try:
                 d[k] = json.loads(d[k])
