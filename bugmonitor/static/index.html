@@ -43,13 +43,13 @@ button,input,select{font:inherit;color:inherit}
 .top-in{max-width:1440px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:20px;height:56px}
 .brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:15px;white-space:nowrap}
 .brand-mark{width:26px;height:26px;border-radius:7px;background:var(--accent);display:grid;place-items:center;color:#fff}
-.tabs{display:flex;gap:2px;height:100%}
-.tab{background:none;border:0;padding:0 14px;height:100%;cursor:pointer;color:var(--ink-2);font-weight:550;border-bottom:2px solid transparent;display:flex;align-items:center;gap:6px}
+.tabs{display:flex;gap:2px;height:100%;overflow-x:auto;flex:1;min-width:0;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}
+.tab{background:none;border:0;padding:0 11px;white-space:nowrap;flex:none;height:100%;cursor:pointer;color:var(--ink-2);font-weight:550;border-bottom:2px solid transparent;display:flex;align-items:center;gap:6px}
 .tab:hover{color:var(--ink)}
 .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
 .count{background:var(--surface-2);color:var(--ink-2);border-radius:999px;padding:0 7px;font-size:12px;font-weight:600;min-width:20px;text-align:center}
 .count.hot{background:var(--critical);color:#fff}
-.top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.top-right{margin-left:auto;display:flex;align-items:center;gap:10px;flex:none}
 .sync{font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:6px;white-space:nowrap}
 .sync .dot{width:7px;height:7px;border-radius:50%;background:var(--good)}
 .sync.err{color:var(--critical-ink)}.sync.err .dot{background:var(--critical)}
@@ -61,14 +61,15 @@ button,input,select{font:inherit;color:inherit}
 /* ---------- layout */
 main{max-width:1440px;margin:0 auto;padding:24px}
 .view{display:none}.view.on{display:block}
-.h-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 14px}
+.h-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 14px;flex-wrap:wrap}
 h2{font-size:20px;margin:0;font-weight:650;letter-spacing:-.01em}
 .sub{color:var(--ink-3);font-size:13px}
 .grid{display:grid;gap:16px}
 .kpis{grid-template-columns:repeat(6,minmax(0,1fr));margin-bottom:16px}
 @media (max-width:1100px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:1500px){.sync #sync-t{display:none}}
 @media (max-width:760px){.sync{display:none}.tabs{overflow-x:auto;flex:1;min-width:0;scrollbar-width:none}.tab{padding:0 10px;white-space:nowrap}.top-right{gap:6px}#sync-btn span{display:none}}
-@media (max-width:600px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.top-in{padding:0 16px;gap:10px}main{padding:16px}.brand span{display:none}}
+@media (max-width:600px){.frow{grid-template-columns:1fr}.frow .help{grid-column:1}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.top-in{padding:0 16px;gap:10px}main{padding:16px}.brand span{display:none}}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);min-width:0}
 .card-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 0}
 .card-h h3{font-size:14px;margin:0;font-weight:620}
@@ -90,11 +91,11 @@ h2{font-size:20px;margin:0;font-weight:650;letter-spacing:-.01em}
 .axis text{fill:var(--ink-3);font-size:11px}
 .grid-line{stroke:var(--line);stroke-width:1}
 .hbars{display:grid;gap:8px}
-.hbar{display:grid;grid-template-columns:minmax(80px,140px) 1fr 36px;align-items:center;gap:10px;font-size:13px;cursor:default}
+.hbar{display:grid;grid-template-columns:minmax(80px,140px) 1fr minmax(36px,auto);align-items:center;gap:10px;font-size:13px;cursor:default}
 .hbar .lab{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hbar .track{display:block;height:10px;background:var(--surface-2);border-radius:5px;overflow:hidden}
 .hbar .fill{display:block;height:100%;background:var(--bar);border-radius:0 5px 5px 0;min-width:2px}
-.hbar .v{text-align:right;color:var(--ink);font-weight:600}
+.hbar .v{text-align:right;color:var(--ink);font-weight:600;white-space:nowrap}
 .hbar:hover .fill{filter:brightness(1.1)}
 .tip{position:fixed;pointer-events:none;z-index:50;background:var(--ink);color:var(--surface);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.5;box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;transition:opacity .08s;white-space:nowrap}
 .tip.on{opacity:1}
@@ -104,7 +105,7 @@ h2{font-size:20px;margin:0;font-weight:650;letter-spacing:-.01em}
 
 /* ---------- tables & filters */
 .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
-.seg{display:inline-flex;background:var(--surface-2);border-radius:8px;padding:2px}
+.seg{display:inline-flex;flex-wrap:wrap;background:var(--surface-2);border-radius:8px;padding:2px;max-width:100%}
 .seg button{border:0;background:none;padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--ink-2);font-weight:550;font-size:13px}
 .seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 .toolbar input,.toolbar select{background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:6px 10px;font-size:13px}
@@ -174,7 +175,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .person .sub{font-weight:400;display:block}
 .prog{height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden}
 .prog i{display:block;height:100%;background:var(--good);border-radius:0 4px 4px 0}
-.rcards{display:grid;gap:16px;padding:16px;grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.rcards{display:grid;gap:16px;padding:16px;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr))}
 .rcard{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:10px;align-content:start}
 .overdue{color:var(--critical-ink);font-weight:600}
 .pad{padding:16px}
@@ -230,6 +231,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <button class="tab" role="tab" data-view="team">Team <span class="count num" id="c-team">0</span></button>
       <button class="tab" role="tab" data-view="time">Time Log <span class="count num" id="c-time">0h</span></button>
       <button class="tab" role="tab" data-view="deploys">Deployments <span class="count num" id="c-deploys">0</span></button>
+      <button class="tab" role="tab" data-view="insights">Insights</button>
       <button class="tab" role="tab" data-view="bugs">Bugs <span class="count num" id="c-bugs">0</span></button>
       <button class="tab" role="tab" data-view="github">GitHub <span class="count num" id="c-gh">0</span></button>
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
@@ -303,6 +305,14 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <button data-v="all" aria-pressed="true">All</button><button data-v="mine" aria-pressed="false">My tickets</button>
       <button data-v="prod" aria-pressed="false">Production</button><button data-v="failed" aria-pressed="false">Failed and rollbacks</button></div></div>
     <div id="dep-body"></div>
+  </section>
+
+  <!-- ================= INSIGHTS ================= -->
+  <section class="view" id="v-insights">
+    <div class="h-row"><h2>Insights</h2><div style="display:flex;gap:8px;align-items:center">
+      <div class="seg" id="ins-seg"><button data-v="metrics" aria-pressed="true">Metrics</button><button data-v="report" aria-pressed="false">Weekly report</button><button data-v="triage" aria-pressed="false">Triage</button></div>
+      <select id="ins-days"><option value="14">14 days</option><option value="30" selected>30 days</option><option value="60">60 days</option></select></div></div>
+    <div id="ins-body"></div>
   </section>
 
   <!-- ================= SETTINGS ================= -->
@@ -531,7 +541,7 @@ document.addEventListener("mousemove", e => {
 });
 
 /* ---------------------------------------------------------------- state */
-let teamView = store.get("bm-team") || "board", CONF = {}, timeView = "me", depView = "all", DEPS = null;
+let teamView = store.get("bm-team") || "board", CONF = {}, timeView = "me", depView = "all", DEPS = null, insView = "metrics", reportWho = "";
 let OV = null, ISSUES = [], GH = {summary: null, prs: [], branches: []}, MINE = null, mineView = store.get("bm-mine") || "board";
 let bScope = "open", bSort = {k: "urgency", d: -1}, ghFilter = "mine";
 let view = store.get("bm-view") || "overview";
@@ -620,10 +630,11 @@ async function renderTeam() {
       <div class="prog"><i style="width:${r.progress}%"></i></div>
       <div class="sub num">${r.done} of ${r.total} done (${r.progress}%) · ${r.by_category.indeterminate} in progress · ${r.by_category.new} to do · ${r.open_prs.length} open PR${r.open_prs.length === 1 ? "" : "s"}</div>
       ${r.blockers.length ? `<div><div class="st critical">${ICON.critical}${r.blockers.length} high-priority bug${r.blockers.length === 1 ? "" : "s"} open</div>${r.blockers.map(miniCard).join("")}</div>` : stBadge("good", "No high-priority bugs open")}
+      <div><button class="btn" data-notes="version=${encodeURIComponent(r.name)}&project=${encodeURIComponent(r.project)}">Draft release notes</button></div>
       ${r.open.length ? `<details><summary class="sub" style="cursor:pointer">Open tickets (${r.open.length})</summary><div style="margin-top:8px">${r.open.slice(0, 30).map(miniCard).join("")}</div></details>` : ""}
     </div>`).join("")}</div>` : '<div class="empty" style="padding:32px">No unreleased versions with tickets in your scope.</div>';
   } else if (teamView === "reviews") {
-    body.innerHTML = `<div class="grid two pad"><div><table><thead><tr><th class="nosort">Pull request</th><th class="nosort">Waiting</th><th class="nosort">Reviews</th><th class="nosort">Comments</th></tr></thead><tbody>
+    body.innerHTML = `<div class="grid two pad"><div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Pull request</th><th class="nosort">Waiting</th><th class="nosort">Reviews</th><th class="nosort">Comments</th></tr></thead><tbody>
       ${d.queue.map(q => `<tr data-pr="${esc(q.repo)}|${q.number}"><td class="wrap"><span class="muted">${esc(q.repo.split("/")[1])}#${q.number}</span> ${esc(q.title)}<div class="sub">by ${esc(q.author)} · +${q.additions ?? 0} −${q.deletions ?? 0}</div></td>
         <td class="num ${q.overdue ? "overdue" : ""}">${hrs(q.waiting_hours)}</td>
         <td><div class="chips">${q.reviewers.map(rvChip).join("") || '<span class="muted">No reviewers</span>'}</div></td>
@@ -650,6 +661,80 @@ async function renderTeam() {
         <td>${esc((i.waiting_on || []).join(", ")) || '<span class="muted">—</span>'}</td></tr>`).join("") || '<tr><td colspan="6" class="empty">Nothing stuck. Nice.</td></tr>'}
       </tbody></table></div>`;
   }
+}
+
+/* ---------------------------------------------------------------- insights */
+const H = h => h == null ? "—" : hrs(h);
+const tiles = arr => `<div class="grid kpis">${arr.map(([l, v, h]) => `<div class="card kpi"><div class="label">${l}</div><div class="value num">${v}</div><div class="hint">${esc(h || "")}</div></div>`).join("")}</div>`;
+
+async function renderInsights() {
+  document.querySelectorAll("#ins-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === insView));
+  const body = $("#ins-body"), days = $("#ins-days").value;
+  if (insView === "report") {
+    const r = await j(`/api/report/weekly?person=${encodeURIComponent(reportWho)}`);
+    const who = [["", "Me"], ["team", "Team"], ...((await j("/api/settings")).members || []).map(m => [m.name, m.name])];
+    body.innerHTML = `<div class="card"><div class="toolbar"><select id="rep-who">${who.map(([v, l]) => `<option value="${esc(v)}" ${v === reportWho ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+      <button class="btn" id="rep-copy">Copy as text</button><span class="sub" id="rep-msg"></span></div>
+      <div class="pad">${tiles([["Resolved", r.resolved.length, Object.entries(r.by_type).map(([t, n]) => `${n} ${t}`).join(", ")],
+        ["Points", r.points || "—", ""], ["PRs merged", r.merged_prs.length, ""], ["Deploys", r.deploys.length, "succeeded"],
+        ["Time logged", `${r.hours_logged}h`, "in Jira"], ["Median hands-on time", H(r.cycle_median_hours), "per ticket"]])}
+      <pre id="rep-text" style="white-space:pre-wrap;background:var(--surface-2);padding:16px;border-radius:10px;font:13px/1.5 ui-monospace,Menlo,monospace">${esc(r.text)}</pre></div></div>`;
+    return;
+  }
+  if (insView === "triage") {
+    const t = await j("/api/triage");
+    body.innerHTML = `<div class="grid two"><div class="card"><div class="card-h"><h3>Possible duplicates</h3><span class="sub">open bugs with very similar titles</span></div>
+      <div class="card-b"><div class="list">${t.duplicates.map(d => `<div class="li"><div class="grow">
+        <div class="t1"><a class="key" href="#" data-open="${esc(d.key)}">${esc(d.key)}</a> ${esc(d.summary)}</div>
+        <div class="t2">looks like <a href="#" data-open="${esc(d.match)}">${esc(d.match)}</a> ${esc(d.match_summary)} <span class="pill">${esc(d.match_status || "")}</span></div></div>
+        <span class="chip">${Math.round(d.score * 100)}% match</span></div>`).join("") || '<div class="empty">No likely duplicates.</div>'}</div></div></div>
+      <div class="card"><div class="card-h"><h3>Suggestions for open bugs</h3><span class="sub">from similar past tickets</span></div>
+      <div class="card-b"><div class="list">${t.suggestions.map(x => `<div class="li"><div class="grow">
+        <div class="t1"><a class="key" href="#" data-open="${esc(x.key)}">${esc(x.key)}</a> ${esc(x.summary)}</div>
+        <div class="t2">${x.suggest_assignee ? `Assignee: <b>${esc(x.suggest_assignee)}</b> · ` : ""}${x.suggest_component ? `Component: <b>${esc(x.suggest_component)}</b> · ` : ""}${x.suggest_priority ? `Priority: <b>${esc(x.suggest_priority)}</b> (now ${esc(x.priority || "none")}) · ` : ""}based on ${x.because.map(k => `<a href="#" data-open="${esc(k)}">${esc(k)}</a>`).join(", ") || "keywords"}</div></div></div>`).join("")
+        || '<div class="empty">Nothing to suggest.</div>'}</div></div></div></div>
+      <p class="sub">These are quick matches on ticket titles. Ask Claude ("triage_help") to reason over the details before changing anything in Jira.</p>`;
+    return;
+  }
+  const d = await j(`/api/insights?days=${days}`);
+  const c = d.cycle, p = d.prs, b = d.bugs, e = d.estimates, dl = d.delivery;
+  body.innerHTML = `
+    <h3 style="margin:4px 0 10px">Flow</h3>
+    ${tiles([["Tickets finished", c.finished, `last ${c.days} days`], ["Hands-on time", H(c.cycle_median_hours), `median; 80% within ${H(c.cycle_p80_hours)}`],
+      ["Created to done", H(c.lead_median_hours), `median; 80% within ${H(c.lead_p80_hours)}`],
+      ["Deploys to production", dl.deploys, `${dl.per_week} a week`], ["Change failure rate", dl.change_failure_rate == null ? "—" : dl.change_failure_rate + "%", "failed or rolled back"],
+      ["Merge to production", H(dl.lead_time_hours), `median; restore ${H(dl.time_to_restore_hours)}`]])}
+    <div class="grid two"><div class="card"><div class="card-h"><h3>Median time in each status</h3><span class="sub">finished tickets</span></div><div class="card-b"><div class="hbars" id="ins-stages"></div></div></div>
+      <div class="card"><div class="card-h"><h3>Tickets finished per week</h3></div><div class="card-b"><div class="chart" id="ins-tp"></div></div></div></div>
+    <h3 style="margin:20px 0 10px">Pull requests</h3>
+    ${tiles([["PRs opened", p.prs, `${p.merged} merged`], ["Time to first review", H(p.first_review_median_hours), "median"], ["Time to merge", H(p.merge_median_hours), "median"],
+      ["Changes requested", p.changes_requested_rate == null ? "—" : p.changes_requested_rate + "%", "of PRs"], ["Median size", p.median_size ?? "—", "lines changed"], ["Authors", p.by_author.length, ""]])}
+    <div class="grid two"><div class="card"><div class="card-h"><h3>PR size</h3></div><div class="card-b"><div class="hbars" id="ins-size"></div></div></div>
+      <div class="card"><div class="card-h"><h3>PRs by author</h3></div><div class="card-b"><div class="hbars" id="ins-auth"></div></div></div></div>
+    <h3 style="margin:20px 0 10px">Bug quality</h3>
+    ${tiles([["Bugs", b.bugs, `last ${b.days} days`], ["Resolved", b.resolved, ""], ["Reopen rate", b.reopen_rate == null ? "—" : b.reopen_rate + "%", "of resolved bugs"],
+      ["Escaped to customers", b.escape_rate == null ? "—" : b.escape_rate + "%", "by label"], ["Estimates within 25%", e.within_25pct == null ? "—" : e.within_25pct + "%", `${e.tickets} estimated tickets`],
+      ["Actual vs. estimate", e.median_ratio == null ? "—" : `${e.median_ratio}×`, `${e.over} over, ${e.under} under`]])}
+    <div class="grid two"><div class="card"><div class="card-h"><h3>Bugs by component</h3></div><div class="card-b"><div class="hbars" id="ins-comp"></div></div></div>
+      <div class="card"><div class="card-h"><h3>Biggest estimate misses</h3></div><div class="card-b"><div class="list">${e.worst.map(w => `<div class="li"><div class="grow">
+        <div class="t1"><a class="key" href="#" data-open="${esc(w.key)}">${esc(w.key)}</a> ${esc(w.assignee || "")}</div>
+        <div class="t2">estimated ${w.estimate_hours}h, took ${w.actual_hours}h (${w.source})</div></div><b class="num">${w.ratio}×</b></div>`).join("") || '<div class="empty">No estimated tickets finished yet.</div>'}</div></div></div></div>`;
+  hbars($("#ins-stages"), c.stages.filter(x => x.median_hours != null).map(x => ({label: x.status, n: x.median_hours})));
+  document.querySelectorAll("#ins-stages .v").forEach(v => v.textContent = hrs(+v.textContent));
+  multiLine($("#ins-tp"), d.throughput.weeks.map(w => ({date: w.week, resolved: w.resolved})), [{key: "resolved", label: "Finished", color: "var(--series-1)"}], "Tickets finished per week");
+  hbars($("#ins-size"), p.sizes);
+  hbars($("#ins-auth"), p.by_author.map(a => ({label: a.author, n: a.opened})));
+  hbars($("#ins-comp"), b.by_component.map(x => ({label: x.label, n: x.n})));
+}
+
+async function showReleaseNotes(params) {
+  const r = await j("/api/release-notes?" + params), el = $("#drawer");
+  el.innerHTML = `<div class="dr-h"><div style="flex:1"><div style="font-size:16px;font-weight:600">Release notes draft</div><div class="sub">${esc(r.title)} · ${r.tickets} tickets</div></div>
+    <button class="btn" id="rn-copy">Copy</button><button class="btn" data-close>Close</button></div>
+    <div class="dr-b">${r.not_done.length ? `<div class="est">${stBadge("warning", `${r.not_done.length} tickets aren't done yet`)} ${esc(r.not_done.join(", "))}</div>` : ""}
+    <pre id="rn-text" style="white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,monospace">${esc(r.text)}</pre>
+    <p class="sub">Ask Claude to polish this ("draft_release_notes") before sharing it.</p></div>`;
+  el.classList.add("on"); $("#scrim").classList.add("on");
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -837,6 +922,7 @@ function openDeploy(id) {
       <div class="sect"><h4>Tickets shipped</h4>${(d.ticket_details || []).map(t => `<div class="li" data-open="${esc(t.key)}" style="cursor:pointer"><div class="grow">
         <div class="t1"><span class="key">${esc(t.key)}</span> ${esc(t.summary || "")}</div><div class="t2">${t.status ? `<span class="pill">${esc(t.status)}</span> ` : ""}${esc(t.assignee || "")}</div></div></div>`).join("")
         || '<div class="muted">No Jira keys found in the shipped commits.</div>'}</div>
+      <div><button class="btn" data-notes="deployment=${encodeURIComponent(d.id)}">Draft release notes for this deploy</button></div>
       <div class="sect"><h4>Pull requests</h4><div class="chips">${(d.prs || []).map(n => `<span class="chip" data-pr="${esc(d.repo)}|${n}" style="cursor:pointer">#${n}</span>`).join("") || '<span class="muted">—</span>'}</div></div>
     </div>`;
   el.classList.add("on"); $("#scrim").classList.add("on");
@@ -1214,6 +1300,7 @@ function show(v) {
   if (v === "time") renderTime();
   if (v === "deploys") renderDeploys();
   if (v === "settings") renderSettings();
+  if (v === "insights") renderInsights();
 }
 
 document.addEventListener("click", async ev => {
@@ -1242,6 +1329,13 @@ document.addEventListener("click", async ev => {
   const sb = ev.target.closest("#b-scope button");
   if (sb) { bScope = sb.dataset.v; document.querySelectorAll("#b-scope button").forEach(b => b.setAttribute("aria-pressed", b === sb)); return renderBugs(); }
   const ts_ = ev.target.closest("#time-seg button"); if (ts_) { timeView = ts_.dataset.v; return renderTime(); }
+  const nb = ev.target.closest("[data-notes]"); if (nb) return showReleaseNotes(nb.dataset.notes);
+  if (ev.target.id === "rn-copy" || ev.target.id === "rep-copy") {
+    const txt = $(ev.target.id === "rn-copy" ? "#rn-text" : "#rep-text").textContent;
+    try { await navigator.clipboard.writeText(txt); ev.target.textContent = "Copied"; } catch { ev.target.textContent = "Select the text to copy"; }
+    return;
+  }
+  const is_ = ev.target.closest("#ins-seg button"); if (is_) { insView = is_.dataset.v; return renderInsights(); }
   const ds = ev.target.closest("#dep-seg button"); if (ds) { depView = ds.dataset.v; return renderDeploys(); }
   const dr = ev.target.closest("tr[data-dep]"); if (dr && !ev.target.closest("[data-open]") && !ev.target.closest("a")) return openDeploy(dr.dataset.dep);
   const tb = ev.target.closest("#team-seg button"); if (tb) { teamView = tb.dataset.v; store.set("bm-team", teamView); return renderTeam(); }
@@ -1251,6 +1345,8 @@ document.addEventListener("click", async ev => {
   if (th) { const k = th.dataset.s; bSort = {k, d: bSort.k === k ? -bSort.d : -1}; return renderBugs(); }
 });
 ["#b-q", "#b-project", "#b-priority", "#b-status", "#b-assignee"].forEach(s => $(s).addEventListener("input", renderBugs));
+$("#ins-days").addEventListener("change", () => renderInsights());
+document.addEventListener("change", ev => { if (ev.target.id === "rep-who") { reportWho = ev.target.value; renderInsights(); } });
 $("#ackall").onclick = async () => { await j("/api/alerts/all/ack", {method: "POST"}); renderActivity(); refresh(); };
 $("#sync-btn").onclick = async () => {
   const b = $("#sync-btn"); b.disabled = true; $("#sync-t").textContent = "Syncing…";

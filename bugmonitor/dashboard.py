@@ -74,6 +74,19 @@ def make_handler(settings: Settings):
                     return self._json(public(settings))
                 if u.path == "/api/config":
                     return self._json(_public_config(settings))
+                if u.path == "/api/insights":
+                    from .insights import all_insights
+                    return self._json(all_insights(conn, settings, int(q.get("days", 30))))
+                if u.path == "/api/report/weekly":
+                    from .reports import as_text, weekly
+                    rep = weekly(conn, settings, q.get("person"), int(q.get("days", 7)))
+                    return self._json(dict(rep, text=as_text(rep)))
+                if u.path == "/api/triage":
+                    from .triage import duplicates, suggestions
+                    return self._json({"duplicates": duplicates(conn, settings), "suggestions": suggestions(conn, settings)})
+                if u.path == "/api/release-notes":
+                    from .triage import release_notes
+                    return self._json(release_notes(conn, settings, q.get("version"), q.get("project"), q.get("deployment")))
                 if u.path == "/api/deployments":
                     from .deployments import overview
                     return self._json(overview(conn, settings, q.get("mine") == "1"))

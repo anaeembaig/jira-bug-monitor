@@ -116,6 +116,41 @@ def my_tickets(status: str | None = None) -> dict:
 
 
 @mcp.tool()
+def engineering_insights(days: int = 30) -> dict:
+    """Cycle time by stage, PR health (time to first review, time to merge, size, changes
+    requested), bug quality (reopen and escape rates, by component), estimate accuracy,
+    weekly throughput, and production delivery metrics."""
+    from .insights import all_insights
+    return all_insights(conn, settings, days)
+
+
+@mcp.tool()
+def weekly_report(person: str | None = None, days: int = 7) -> dict:
+    """What got done: resolved tickets, merged PRs, deploys, time logged, as data plus ready-to-paste
+    text. person: blank for you, "team" for the whole team, or a teammate's Jira name."""
+    from .reports import as_text, weekly
+    rep = weekly(conn, settings, person, days)
+    return dict(rep, text=as_text(rep))
+
+
+@mcp.tool()
+def triage_help() -> dict:
+    """Likely duplicate bugs, and suggested assignee/component/priority for open bugs missing them,
+    based on similar past tickets. Use get_ticket for the details before acting on a suggestion."""
+    from .triage import duplicates, suggestions
+    return {"duplicates": duplicates(conn, settings), "suggestions": suggestions(conn, settings)}
+
+
+@mcp.tool()
+def draft_release_notes(version: str | None = None, project: str | None = None,
+                        deployment_id: str | None = None) -> dict:
+    """Release notes grouped into fixes and improvements, from a Jira fix version or from what a
+    deployment shipped. Polish the wording for the user before they share it."""
+    from .triage import release_notes
+    return release_notes(conn, settings, version, project, deployment_id)
+
+
+@mcp.tool()
 def deployments(mine_only: bool = False) -> dict:
     """Deployments to every environment: latest per environment, recent deploys with who deployed,
     when, state and status history, duration, logs, and the Jira tickets, PRs, and commits each
