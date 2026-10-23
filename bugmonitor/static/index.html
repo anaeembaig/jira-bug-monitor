@@ -217,6 +217,40 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .banner{background:var(--surface);border:1px dashed var(--line-strong);border-radius:var(--radius);padding:20px;color:var(--ink-2)}
 .banner code{background:var(--surface-2);padding:1px 5px;border-radius:4px;font-size:12px}
 .banner pre{background:var(--surface-2);padding:12px;border-radius:8px;font-size:12px;overflow:auto}
+
+/* ---------- search */
+.gsearch{position:relative;flex:none}
+.gsearch input{width:220px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:6px 10px 6px 30px;font-size:13px}
+.gsearch input:focus{outline:2px solid var(--accent);outline-offset:-1px;background:var(--surface)}
+.gsearch .ic{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--ink-3);pointer-events:none}
+#gs-btn{display:none}
+.gs-panel{position:absolute;right:0;top:calc(100% + 6px);width:min(460px,92vw);max-height:70vh;overflow:auto;background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.16);display:none;z-index:60;padding:6px 0}
+.gs-panel.on{display:block}
+.gs-g{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:650;padding:8px 14px 4px}
+.gs-i{display:block;padding:7px 14px;cursor:pointer;color:var(--ink)}
+.gs-i:hover,.gs-i.sel{background:var(--surface-2);text-decoration:none}
+.gs-i .t1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.gs-i .t2{font-size:12px;color:var(--ink-3)}
+@media (max-width:760px){.gsearch input{display:none}.gsearch .ic{display:none}#gs-btn{display:inline-flex}
+  .gsearch.open{position:fixed;left:0;right:0;top:56px;background:var(--surface);border-bottom:1px solid var(--line);padding:8px 16px;z-index:25}
+  .gsearch.open input{display:block;width:100%;padding-left:10px}.gsearch.open .gs-panel{left:16px;right:16px;width:auto}}
+
+/* ---------- actions and small bits */
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.actions select,.actions input,.note-box,.inline-in{background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:6px 10px;font-size:13px}
+.note-box{width:100%;min-height:90px;font:inherit;font-size:13px;resize:vertical}
+pre.cmd{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-size:12px;overflow:auto;margin:6px 0 0;white-space:pre-wrap;word-break:break-all}
+.check{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}
+.check:last-child{border-bottom:0}
+.check .grow{flex:1;min-width:0}
+.check>.st{min-width:78px}
+.load{height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden;min-width:80px}
+.load i{display:block;height:100%;border-radius:0 4px 4px 0}
+.big{font-size:28px;font-weight:650;letter-spacing:-.02em;line-height:1.1}
+.su-sec h4{margin:12px 0 4px}
+.su-sec:first-child h4{margin-top:0}
+.msg{font-size:12px;color:var(--ink-3)}
+@media (max-width:600px){.rowcard[data-off],.rowcard[data-member]{grid-template-columns:1fr !important}.rowcard input,.rowcard select{min-width:0;width:100%}}
 </style>
 </head>
 <body>
@@ -227,16 +261,26 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
     </div><span>Bug Monitor</span></div>
     <nav class="tabs" role="tablist">
       <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
+      <button class="tab" role="tab" data-view="day">My Day <span class="count num" id="c-day">0</span></button>
       <button class="tab" role="tab" data-view="mine">My Tickets <span class="count num" id="c-mine">0</span></button>
       <button class="tab" role="tab" data-view="team">Team <span class="count num" id="c-team">0</span></button>
       <button class="tab" role="tab" data-view="time">Time Log <span class="count num" id="c-time">0h</span></button>
       <button class="tab" role="tab" data-view="deploys">Deployments <span class="count num" id="c-deploys">0</span></button>
       <button class="tab" role="tab" data-view="insights">Insights</button>
       <button class="tab" role="tab" data-view="bugs">Bugs <span class="count num" id="c-bugs">0</span></button>
+      <button class="tab" role="tab" data-view="quality">Quality <span class="count num" id="c-quality">0</span></button>
       <button class="tab" role="tab" data-view="github">GitHub <span class="count num" id="c-gh">0</span></button>
+      <button class="tab" role="tab" data-view="code">Code Health <span class="count num" id="c-code">0</span></button>
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
     </nav>
     <div class="top-right">
+      <div class="gsearch" id="gsearch">
+        <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="gs" type="search" placeholder="Search everything  /" autocomplete="off" aria-label="Search tickets, PRs, deploys, and more">
+        <div class="gs-panel" id="gs-panel" role="listbox"></div>
+      </div>
+      <button class="btn icon" id="gs-btn" title="Search" aria-label="Search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
       <button class="btn icon" id="settings-btn" title="Settings" aria-label="Settings" data-goto="settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
       <span class="sync" id="sync"><span class="dot"></span><span id="sync-t">Loading…</span></span>
@@ -272,6 +316,12 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
     </div>
   </section>
 
+  <!-- ================= MY DAY ================= -->
+  <section class="view" id="v-day">
+    <div class="h-row"><h2>My Day</h2><span class="sub" id="day-sub"></span></div>
+    <div id="day-body"><div class="empty" style="padding:32px">Loading…</div></div>
+  </section>
+
   <!-- ================= MY TICKETS ================= -->
   <section class="view" id="v-mine">
     <div class="h-row"><h2>My Tickets</h2><span class="sub" id="mine-sub"></span></div>
@@ -288,6 +338,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <div class="toolbar"><div class="seg" id="team-seg">
         <button data-v="board">Board</button><button data-v="sprint">Sprint</button><button data-v="releases">Releases</button>
         <button data-v="reviews">Review queue</button><button data-v="qa">QA handoff</button><button data-v="stuck">Stuck work</button>
+        <button data-v="forecast">Forecast</button><button data-v="capacity">Capacity</button><button data-v="readiness">Release readiness</button>
       </div></div>
       <div id="team-body"><div class="empty" style="padding:32px">Loading…</div></div>
     </div>
@@ -338,17 +389,31 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <div class="tw"><table>
         <thead><tr>
           <th data-s="urgency">Urgency</th><th data-s="key">Key</th><th data-s="priority">Priority</th><th data-s="status">Status</th>
-          <th data-s="summary">Summary</th><th data-s="assignee">Assignee</th><th data-s="created">Age</th><th class="nosort">Pull request</th>
+          <th data-s="summary">Summary</th><th data-s="assignee">Assignee</th><th data-s="created">Age</th><th class="nosort sla-col">SLA</th><th class="nosort">Pull request</th>
         </tr></thead>
         <tbody id="b-rows"></tbody>
       </table></div>
     </div>
   </section>
 
+  <!-- ================= QUALITY ================= -->
+  <section class="view" id="v-quality">
+    <div class="h-row"><h2>Quality</h2><div class="seg" id="q-seg">
+      <button data-v="reports">Bug reports</button><button data-v="sla">SLA</button><button data-v="hotspots">Hotspots</button></div></div>
+    <div id="q-body"></div>
+  </section>
+
   <!-- ================= GITHUB ================= -->
   <section class="view" id="v-github">
     <div class="h-row"><h2>GitHub</h2><span class="sub" id="gh-sub"></span></div>
     <div id="gh-body"></div>
+  </section>
+
+  <!-- ================= CODE HEALTH ================= -->
+  <section class="view" id="v-code">
+    <div class="h-row"><h2>Code Health</h2><div class="seg" id="code-seg">
+      <button data-v="ci">Builds</button><button data-v="security">Security</button><button data-v="reviewers">Reviewers</button></div></div>
+    <div id="code-body"></div>
   </section>
 
   <!-- ================= ACTIVITY ================= -->
@@ -601,6 +666,7 @@ async function renderTeam() {
       or set <code>jql</code> under <code>[team]</code> in your settings file, then add teammates under <code>[[team.members]]</code>.</div>`;
     return;
   }
+  if (["forecast", "capacity", "readiness"].includes(teamView)) return renderPlanning(teamView, body);
   const d = await j("/api/team/" + teamView);
   if (teamView === "board") {
     body.innerHTML = `<div class="tboard"><table><thead><tr><th class="nosort">Person</th>${d.statuses.map(st =>
@@ -750,18 +816,31 @@ const LABELS = {
     weekly_report_day: "Weekly report day", sync_health: "Tell me when syncing keeps failing"},
   timelog: {enabled: "Time log", daily_target_hours: "Daily target (hours)", reminder_time: "End-of-day reminder",
     recap_in_digest: "Yesterday's hours in the daily summary", workdays: "Workdays", allow_jira_write: "Allow logging time to Jira from here"},
-  team: {name: "Team name", pr_review_hours: "PR review limit (hours)"},
+  team: {name: "Team name", pr_review_hours: "PR review limit (hours)", focus_hours_per_day: "Focus hours per day (capacity)",
+    hours_per_point: "Hours per story point (0 = learn)"},
+  sla: {enabled: "SLA timers for bugs", warn_at: "Warn when this share of the time is used", route: "Send breaches to channel"},
+  quality: {enabled: "Check bug reports", min_description_words: "Shortest useful description (words)", require_steps: "Needs steps to reproduce",
+    require_expected: "Needs expected vs. actual result", require_environment: "Needs environment or version", require_version: "Needs affected version"},
+  code_health: {ci: "Track builds on default branches", alert_ci_failures: "Tell me when a build breaks", security: "Track security alerts",
+    alert_security: "Tell me about new security alerts", security_min_severity: "Lowest severity to alert on"},
 };
+Object.assign(LABELS.notify, {standup_time: "Standup note time", standup_team: "Post the team standup to digest channels"});
 const HELP = {quiet_hours: "e.g. 20:00-08:00. Held messages arrive as one summary afterward.", digest_time: "e.g. 09:30. Blank turns it off.",
-  reminder_time: "e.g. 17:30. Sent when you've logged less than your target.", weekly_report_day: "e.g. Friday. Blank turns it off."};
+  reminder_time: "e.g. 17:30. Sent when you've logged less than your target.", weekly_report_day: "e.g. Friday. Blank turns it off.",
+  standup_time: "e.g. 09:15. Yesterday, today, and blockers in your Teams chat on workdays. Blank turns it off.",
+  warn_at: "0.8 warns at 80% of the target. Set the hours per priority under [sla] in the settings file.",
+  hours_per_point: "Used for tickets without a Jira estimate."};
 const SECTIONS = [["Your notifications", "alerts"], ["Pull requests", "github"], ["Deployments", "deployments"], ["Timing and summaries", "notify"],
-  ["Time log", "timelog"], ["Team", "team"]];
+  ["Time log", "timelog"], ["Team", "team"], ["SLA targets", "sla"], ["Bug report checks", "quality"], ["Code health", "code_health"]];
 const DAYS7 = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function field(sec, key, v) {
   const id = `f-${sec}-${key}`, label = (LABELS[sec] || {})[key] || key;
   let input;
   if (typeof v === "boolean") input = `<input type="checkbox" id="${id}" ${v ? "checked" : ""}>`;
+  else if (sec === "sla" && key === "route") input = `<select id="${id}"><option value="">None (only me, for my tickets)</option>${SET.routes.map(r => `<option ${r.name === v ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>`;
+  else if (key === "security_min_severity") input = `<select id="${id}">${["low", "medium", "high", "critical"].map(x => `<option ${x === v ? "selected" : ""}>${x}</option>`).join("")}</select>`;
+  else if (key === "warn_at") input = `<input type="number" step="0.05" min="0.1" max="1" id="${id}" value="${v}">`;
   else if (key === "external_min_priority") input = `<select id="${id}">${SET.priorities.map(p => `<option ${p === v ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
   else if (key === "workdays") input = `<span class="chips">${DAYS7.map(d => `<label class="chip"><input type="checkbox" data-day="${d}" ${(v || []).map(x => x.slice(0, 3).toLowerCase()).includes(d.toLowerCase()) ? "checked" : ""}> ${d}</label>`).join("")}</span>`;
   else if (typeof v === "number") input = `<input type="number" step="0.5" min="0" id="${id}" value="${v}">`;
@@ -783,6 +862,11 @@ function routeCard(r, i) {
 const memberRow = (m, i) => `<div class="rowcard" data-member="${i}" style="grid-template-columns:1fr 1fr 1fr auto;align-items:center">
   <input type="text" data-k="name" placeholder="Jira display name" value="${esc(m.name || "")}"><input type="text" data-k="github" placeholder="GitHub login" value="${esc(m.github || "")}">
   <input type="text" data-k="email" placeholder="Email (for Teams @mentions)" value="${esc(m.email || "")}"><button class="btn" data-del-member="${i}">Remove</button></div>`;
+const offRow = (t, i) => `<div class="rowcard" data-off="${i}" style="grid-template-columns:1.4fr 1fr 1fr .7fr auto;align-items:center">
+  <select data-k="name">${[...new Set([...(SET.members || []).map(m => m.name), t.name].filter(Boolean))].map(n => `<option ${n === t.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+  <input type="date" data-k="start" value="${esc(t.start || "")}" aria-label="First day off"><input type="date" data-k="end" value="${esc(t.end || "")}" aria-label="Last day off">
+  <input type="number" min="0" max="12" step="0.5" data-k="hours" placeholder="Hours (blank = full day)" value="${esc(t.hours || "")}" aria-label="Hours off per day">
+  <button class="btn" data-del-off="${i}">Remove</button></div>`;
 const escRow = (e, i) => `<div class="rowcard" data-esc="${i}"><button class="btn x" data-del-esc="${i}">Remove</button>
   <label class="frow"><span>Rule name</span><input type="text" data-k="name" value="${esc(e.name || "")}"></label>
   <label class="frow"><span>Priority at or above</span><select data-k="min_priority">${SET.priorities.map(p => `<option ${p === e.min_priority ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
@@ -804,6 +888,9 @@ async function renderSettings() {
       <div class="form" id="routes">${SET.routes.map(routeCard).join("") || '<div class="muted">No channels yet.</div>'}</div></div></div>
     <div class="card mt"><div class="card-h"><h3>Teammates</h3><button class="btn" id="add-member">Add teammate</button></div>
       <div class="card-b form" id="members">${SET.members.map(memberRow).join("") || '<div class="muted">No teammates yet.</div>'}</div></div>
+    <div class="card mt"><div class="card-h"><h3>Time off</h3><button class="btn" id="add-off">Add time off</button></div>
+      <div class="card-b form"><p class="sub" style="margin-top:0">Used by Team &gt; Capacity. Leave hours blank for a full day.</p>
+      <div id="offs" class="form">${SET.time_off.map(offRow).join("") || '<div class="muted">No time off entered.</div>'}</div></div></div>
     <div class="card mt"><div class="card-h"><h3>Escalation rules</h3><button class="btn" id="add-esc">Add rule</button></div>
       <div class="card-b form" id="escs">${SET.escalations.map(escRow).join("") || '<div class="muted">No rules yet. Example: Critical bug unassigned for 2 hours.</div>'}</div></div>
     <div class="save-bar"><span class="sub" id="save-msg"></span><button class="btn primary" id="save-settings">Save settings</button></div>`;
@@ -831,7 +918,8 @@ function collectSettings() {
   const escalations = [...document.querySelectorAll("[data-esc]")].map(c => ({name: c.querySelector('[data-k="name"]').value.trim(),
     min_priority: c.querySelector('[data-k="min_priority"]').value, unassigned_hours: +c.querySelector('[data-k="unassigned_hours"]').value,
     open_hours: +c.querySelector('[data-k="open_hours"]').value, projects: list(c.querySelector('[data-k="projects"]').value), route: c.querySelector('[data-k="route"]').value}));
-  const body = {values, routes, members, escalations};
+  const time_off = [...document.querySelectorAll("[data-off]")].map(c => Object.fromEntries(["name", "start", "end", "hours"].map(k => [k, c.querySelector(`[data-k="${k}"]`).value.trim()])));
+  const body = {values, routes, members, escalations, time_off};
   const pw = $("#f-private").value.trim(); if (pw) body.private_webhook = pw;
   return body;
 }
@@ -847,8 +935,9 @@ async function settingsClick(ev) {
   if (tr) { const r = await j("/api/settings/test-route", {method: "POST", body: JSON.stringify({name: tr.dataset.testRoute})}); alert(r.ok ? "Sent. Check the channel." : r.error); return true; }
   if (ev.target.id === "add-route") { SET.routes.push({events: ["new_bug", "escalation", "stuck", "deployment"], mention_assignee: true}); $("#routes").innerHTML = SET.routes.map(routeCard).join(""); return true; }
   if (ev.target.id === "add-member") { SET.members.push({}); $("#members").innerHTML = SET.members.map(memberRow).join(""); return true; }
+  if (ev.target.id === "add-off") { SET.time_off.push({name: (SET.members[0] || {}).name || ""}); $("#offs").innerHTML = SET.time_off.map(offRow).join(""); return true; }
   if (ev.target.id === "add-esc") { SET.escalations.push({min_priority: "Critical", unassigned_hours: 2}); $("#escs").innerHTML = SET.escalations.map(escRow).join(""); return true; }
-  for (const [attr, key, el, fn] of [["data-del-route", "routes", "#routes", routeCard], ["data-del-member", "members", "#members", memberRow], ["data-del-esc", "escalations", "#escs", escRow]]) {
+  for (const [attr, key, el, fn] of [["data-del-route", "routes", "#routes", routeCard], ["data-del-member", "members", "#members", memberRow], ["data-del-esc", "escalations", "#escs", escRow], ["data-del-off", "time_off", "#offs", offRow]]) {
     const b = ev.target.closest(`[${attr}]`);
     if (b) { SET[key].splice(+b.getAttribute(attr), 1); $(el).innerHTML = SET[key].map(fn).join(""); return true; }
   }
@@ -959,12 +1048,16 @@ async function renderTime() {
       ${d.rows.map(r => `<tr><td><b>${esc(r.person)}</b></td>${d.dates.map(x => { const h = r.days[x.date];
         return `<td class="num ${x.workday && h < d.target_hours ? "low" : ""}">${h ? h : (x.workday ? "0" : "")}</td>`; }).join("")}
         <td class="num"><b>${r.total}</b></td><td class="num">${r.tickets}</td></tr>`).join("") || '<tr><td colspan="13" class="empty">No worklogs yet.</td></tr>'}
-      </tbody></table></div><div class="sub pad">Hours logged in Jira. Highlighted workdays are under the ${d.target_hours}h target.</div></div>`;
+      </tbody></table></div><div class="sub pad">Hours logged in Jira. Highlighted workdays are under the ${d.target_hours}h target.
+        <a class="btn" style="margin-left:8px" href="/api/timelog/export.csv?team=1&days=14">Export team timesheet (CSV)</a></div></div>`;
     return;
   }
   const d = await j("/api/timelog");
   const today = d.days[0];
   body.innerHTML = `
+    <div class="actions" style="margin-bottom:12px"><a class="btn" href="/api/timelog/export.csv?days=14">Export last 2 weeks (CSV)</a>
+      <a class="btn" href="/api/timelog/export.csv?days=31">Export last 31 days (CSV)</a>
+      <a href="#" data-goto="day" class="sub" style="margin-left:auto">Suggested worklogs are on My Day</a></div>
     <div class="grid kpis">${[["Logged today", `${today.logged_hours}h`, `of ${today.target_hours}h target`],
       ["This week", `${d.week.logged}h`, `of ${d.week.target}h so far`],
       ["Tracked in Claude today", hrs(today.tracked_hours), "from log_work"],
@@ -1077,8 +1170,10 @@ function renderBugs() {
       <td class="wrap">${esc(i.summary)}${i.reopen_count ? ` <span class="chip">reopened ×${i.reopen_count}</span>` : ""}</td>
       <td>${i.assignee ? esc(i.assignee) : '<span class="muted">Unassigned</span>'}</td>
       <td class="muted num">${ago(i.created)}</td>
+      <td class="sla-col">${slaBadge(i.sla)}</td>
       <td>${(i.prs || []).map(p => `<a href="${esc(p.url)}" target="_blank" data-stop title="${esc(p.status)}">#${p.number}</a> ${prBadge(p.status)}`).join("<br>") || '<span class="muted">—</span>'}</td>
-    </tr>`).join("") || `<tr><td colspan="8" class="empty">No bugs match these filters.</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="9" class="empty">No bugs match these filters.</td></tr>`;
+  document.querySelectorAll("#v-bugs .sla-col").forEach(c => c.style.display = CONF.sla_enabled ? "" : "none");
 }
 
 /* ---------------------------------------------------------------- github */
@@ -1177,6 +1272,7 @@ async function openTicket(key) {
         <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(t.summary)}</div></div>
         <button class="btn" data-close aria-label="Close">Close</button></div>
       <div class="dr-b">
+        <div class="actions" id="t-actions"></div>
         <div class="kv">
           <span class="k">Status</span><span><span class="pill">${esc(t.status)}</span></span>
           <span class="k">Priority</span><span>${priBadge(t.priority)}</span>
@@ -1189,6 +1285,8 @@ async function openTicket(key) {
           <span class="k">Your logged time</span><span class="num">${hrs((t.local_work_minutes || 0) / 60)}</span>
         </div>
         <div class="est"><b>Fix estimate</b><div style="margin-top:4px">${esc(e.summary || e.error || "Not available yet")}</div></div>
+        ${t.description ? `<div class="sect"><h4>Description</h4><div class="cm-b" style="max-height:220px">${esc(t.description)}</div></div>` : ""}
+        <div id="t-extra"></div>
         <div class="sect"><h4>Time in each status</h4><div class="chips" style="gap:6px">${byStatus || '<span class="muted">—</span>'}</div></div>
         <div class="sect"><h4>Pull requests & branches</h4>
           ${(t.prs || []).map(p => `<div class="li" data-pr="${esc(p.repo)}|${p.number}" style="cursor:pointer"><div class="grow">
@@ -1205,6 +1303,7 @@ async function openTicket(key) {
           <div class="when">${esc(new Date(ev.ts).toLocaleString())} ${ev.author ? "· " + esc(ev.author) : ""}</div>
           <div><b>${esc(ev.kind.replace("work:", "work · "))}</b> ${ev.from_val ? esc(ev.from_val) + " → " : ""}${esc(ev.to_val || "")} ${ev.minutes ? `<span class="muted">(${ev.minutes} min)</span>` : ""}</div></div>`).join("") || '<div class="muted">No history yet.</div>'}</div></div>
       </div>`;
+    ticketExtras(t.key);
   }
   d.classList.add("on"); $("#scrim").classList.add("on");
 }
@@ -1259,6 +1358,266 @@ async function openPR(repo, number) {
 
 function closeDrawer() { $("#drawer").classList.remove("on"); $("#scrim").classList.remove("on"); }
 
+/* ---------------------------------------------------------------- v1.1 helpers */
+const post = (url, body) => j(url, {method: "POST", body: JSON.stringify(body || {})});
+const SLA_CLS = {breached: ["critical", "Breached"], warn: ["warning", "Due soon"], ok: ["good", "On time"], met: ["good", "Met"], missed: ["serious", "Missed"]};
+const left = h => h == null ? "" : h < 0 ? `${hrs(-h)} over` : `${hrs(h)} left`;
+function slaBadge(x) {
+  if (!x || !x.state) return '<span class="muted">—</span>';
+  const [c, l] = SLA_CLS[x.state] || ["neutral", x.state];
+  return `${stBadge(c, l)}${x.left_hours != null ? `<div class="sub num">${x.stage === "response" ? "response, " : ""}${left(x.left_hours)}</div>` : ""}`;
+}
+const slaStage = (name, x) => x ? `<span class="k">${name}</span><span>${stBadge(...(SLA_CLS[x.state] || ["neutral", x.state]))}
+  <span class="sub num">${x.target_hours}h target · ${x.met_at ? `met after ${hrs(x.used_hours)}` : left(x.left_hours)}</span></span>` : "";
+async function copyText(txt, btn) {
+  try { await navigator.clipboard.writeText(txt); if (btn) btn.textContent = "Copied"; } catch { if (btn) btn.textContent = "Select the text to copy"; }
+}
+const keyLink = (k, url) => /^[A-Z][A-Z0-9_]+-\d+$/.test(k) ? `<a class="key" href="#" data-open="${esc(k)}">${esc(k)}</a>` : (url ? `<a class="key" href="${esc(url)}" target="_blank">${esc(k)}</a>` : `<span class="key">${esc(k)}</span>`);
+const liItem = x => `<div class="li"><div class="grow"><div class="t1">${keyLink(x.key, x.url)} ${esc(x.summary || "")}</div>${x.detail ? `<div class="t2">${esc(x.detail)}</div>` : ""}</div></div>`;
+const emptyBox = t => `<div class="empty">${t}</div>`;
+let qView = store.get("bm-q") || "reports", codeView = store.get("bm-code") || "ci", STANDUP = null;
+
+/* ---------------------------------------------------------------- my day */
+async function renderDay() {
+  const body = $("#day-body");
+  const [su, w, sug, rv] = await Promise.all([j("/api/standup"), j("/api/watches"), j("/api/timelog/suggestions"),
+    CONF.github_enabled ? j("/api/reviewers/mine") : Promise.resolve([])]);
+  STANDUP = su;
+  const since = (new Date(su.date) - new Date(su.since)) / 864e5 === 1 ? "Yesterday" : `Since ${new Date(su.since + "T00:00").toLocaleDateString(undefined, {weekday: "long"})}`;
+  $("#day-sub").textContent = `${su.person || "You"} · ${new Date(su.date + "T00:00").toLocaleDateString(undefined, {weekday: "long", month: "short", day: "numeric"})}`;
+  body.innerHTML = `<div class="grid two">
+    <div class="card"><div class="card-h"><h3>Standup</h3><div class="actions">
+        <button class="btn" id="su-copy">Copy</button><button class="btn" id="su-post">Post to my Teams chat</button>
+        ${CONF.members ? '<button class="btn" id="su-team">Team standup</button>' : ""}</div></div>
+      <div class="card-b" id="su-body">
+        <div class="su-sec"><h4 class="sect">${since}</h4>${su.yesterday.map(liItem).join("") || emptyBox("Nothing logged. Log work from Claude or Jira and it shows up here.")}</div>
+        <div class="su-sec"><h4>Today</h4>${su.today.map(liItem).join("") || emptyBox("Nothing in progress.")}</div>
+        <div class="su-sec"><h4>Blockers</h4>${su.blockers.map(liItem).join("") || emptyBox("None.")}</div>
+        <div class="msg" id="su-msg"></div></div></div>
+    <div style="display:grid;gap:16px;align-content:start">
+      <div class="card"><div class="card-h"><h3>Worklogs you may have missed</h3><span class="sub">${sug.items.length}</span></div>
+        <div class="card-b"><div class="list">${sug.items.map(x => `<div class="li"><div class="grow">
+          <div class="t1">${keyLink(x.key, x.url)} ${esc(x.summary || "")}</div>
+          <div class="t2">${fmtDate(x.date)} · <b class="num">${x.hours}h</b> · ${esc(x.reason)}</div></div>
+          <div class="actions">${sug.can_write ? `<button class="btn" data-wl-log="${esc(x.key)}|${x.date}|${x.hours}|${esc(x.comment)}">Log</button>` : ""}
+          <button class="btn" data-wl-skip="${esc(x.key)}|${x.date}">Dismiss</button></div></div>`).join("")
+          || emptyBox("All caught up.")}</div>
+          ${!sug.can_write && sug.items.length ? '<div class="msg">To log these from here, turn on "Allow logging time to Jira" in Settings.</div>' : ""}</div></div>
+      <div class="card"><div class="card-h"><h3>Watching</h3><span class="sub">alerts for tickets you don't own</span></div>
+        <div class="card-b"><div class="actions" style="margin-bottom:8px"><input class="inline-in" id="watch-key" placeholder="Ticket key, e.g. HUM-123" style="flex:1;min-width:0">
+          <button class="btn" id="watch-add">Watch</button></div>
+          <div class="list">${w.watches.map(x => `<div class="li"><div class="grow"><div class="t1">${keyLink(x.key, x.url)} ${esc(x.summary || "")}</div>
+            <div class="t2">${x.status ? `<span class="pill">${esc(x.status)}</span> ` : ""}${esc(x.assignee || "")}</div></div>
+            <button class="btn" data-unwatch="${esc(x.key)}">Stop</button></div>`).join("") || emptyBox("Not watching anything.")}</div>
+          ${w.snoozes.length ? `<h4 class="sect" style="margin:14px 0 4px;font-size:12px;color:var(--ink-3);text-transform:uppercase">Snoozed</h4>
+            <div class="list">${w.snoozes.map(x => `<div class="li"><div class="grow">${keyLink(x.key)}<div class="t2">until ${esc(new Date(x.until).toLocaleString())}</div></div>
+            <button class="btn" data-unsnooze="${esc(x.key)}">Unsnooze</button></div>`).join("")}</div>` : ""}</div></div>
+      ${CONF.github_enabled ? `<div class="card"><div class="card-h"><h3>Your PRs with no reviewer</h3></div><div class="card-b"><div class="list">
+        ${rv.map(p => `<div class="li"><div class="grow"><div class="t1"><a class="key" href="#" data-pr="${esc(p.repo)}|${p.number}">${esc(p.repo.split("/")[1])}#${p.number}</a> ${esc(p.title)}</div>
+          ${p.suggestions.map(s => `<div class="t2">Ask <b>${esc(s.name || s.login)}</b>: ${esc(s.reasons.join(", "))}</div>`).join("")}</div></div>`).join("")
+          || emptyBox("Every open PR has a reviewer.")}</div></div></div>` : ""}
+    </div></div>`;
+}
+
+/* ---------------------------------------------------------------- quality */
+async function renderQuality() {
+  document.querySelectorAll("#q-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === qView));
+  const body = $("#q-body");
+  if (qView === "reports") {
+    const d = await j("/api/quality");
+    body.innerHTML = tiles([["Open bugs checked", d.checked, ""], ["Missing details", d.incomplete, "need more from the reporter"],
+        ["Complete reports", d.complete_pct == null ? "—" : d.complete_pct + "%", ""]]) + `
+      <div class="grid two"><div class="card"><div class="card-h"><h3>What's missing most</h3></div><div class="card-b"><div class="hbars" id="q-prob"></div></div></div>
+        <div class="card"><div class="card-h"><h3>By reporter</h3></div><div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Reporter</th><th class="nosort">Open bugs</th><th class="nosort">Missing details</th></tr></thead><tbody>
+          ${d.by_reporter.map(r => `<tr><td>${esc(r.reporter)}</td><td class="num">${r.bugs}</td><td class="num">${r.incomplete}</td></tr>`).join("") || '<tr><td colspan="3" class="empty">No open bugs.</td></tr>'}</tbody></table></div></div></div>
+      <div class="card mt"><div class="card-h"><h3>Bugs missing details</h3><span class="sub">open the ticket to send the reporter a note</span></div>
+        <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Bug</th><th class="nosort">Priority</th><th class="nosort">Reporter</th><th class="nosort">Score</th><th class="nosort">Missing</th></tr></thead><tbody>
+        ${d.items.map(i => `<tr data-open="${esc(i.key)}"><td class="wrap"><span class="key">${esc(i.key)}</span> ${esc(i.summary)}</td><td>${priBadge(i.priority)}</td>
+          <td>${esc(i.reporter || "")}</td><td class="num">${i.score}</td><td><div class="chips">${i.problems.map(p => `<span class="chip">${esc(p.text)}</span>`).join("")}</div></td></tr>`).join("")
+          || '<tr><td colspan="5" class="empty">Every open bug report has what it needs.</td></tr>'}</tbody></table></div></div>`;
+    hbars($("#q-prob"), d.by_problem);
+  } else if (qView === "sla") {
+    const d = await j("/api/sla");
+    if (!d.enabled) { body.innerHTML = '<div class="banner">SLA timers are off. Turn them on in Settings under SLA targets, then set the hours for each priority in your settings file under <code>[sla]</code>.</div>'; return; }
+    body.innerHTML = tiles([["Breached", d.breached, "open bugs past a target"], ["Due soon", d.warn, "most of the time used"],
+        ["First response on time", d.response_met_pct == null ? "—" : d.response_met_pct + "%", `last ${d.days} days`],
+        ["Fixed on time", d.resolve_met_pct == null ? "—" : d.resolve_met_pct + "%", `last ${d.days} days`]]) + `
+      <div class="card"><div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Bug</th><th class="nosort">Priority</th><th class="nosort">Assignee</th>
+        <th class="nosort">First response</th><th class="nosort">Fix</th></tr></thead><tbody>
+        ${d.items.map(i => { const st = x => x ? `${stBadge(...(SLA_CLS[x.state] || ["neutral", x.state]))}<div class="sub num">${x.met_at ? "done" : left(x.left_hours)}</div>` : '<span class="muted">—</span>';
+          return `<tr data-open="${esc(i.key)}"><td class="wrap"><span class="key">${esc(i.key)}</span> ${esc(i.summary)}</td><td>${priBadge(i.priority)}</td>
+          <td>${esc(i.assignee || "Unassigned")}</td><td>${st(i.sla.response)}</td><td>${st(i.sla.resolve)}</td></tr>`; }).join("")
+          || '<tr><td colspan="5" class="empty">No open bugs with an SLA target.</td></tr>'}</tbody></table></div></div>
+      <div class="card mt"><div class="card-h"><h3>Targets</h3></div><div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Priority</th><th class="nosort">First response</th><th class="nosort">Fix</th></tr></thead><tbody>
+        ${d.targets.map(t => `<tr><td>${priBadge(t.priority)}</td><td class="num">${t.response_hours}h</td><td class="num">${hrs(t.resolve_hours)}</td></tr>`).join("")}</tbody></table></div></div>`;
+  } else {
+    const d = await j("/api/hotspots?days=90");
+    const tbl = (rows, col) => `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">${col === "path" ? "File" : "Folder"}</th><th class="nosort">Bugs</th><th class="nosort">Fix PRs</th><th class="nosort">Tickets</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="wrap"><span class="path">${esc(r[col])}</span><div class="sub">${esc(r.repo)}</div></td><td class="num">${r.bugs}</td><td class="num">${r.fixes}</td>
+        <td><div class="chips">${r.tickets.map(k => `<a class="chip" href="#" data-open="${esc(k)}">${esc(k)}</a>`).join("")}</div></td></tr>`).join("")
+        || `<tr><td colspan="4" class="empty">${CONF.github_enabled ? "No bug-fix PRs with files yet." : "Needs GitHub."}</td></tr>`}</tbody></table></div>`;
+    body.innerHTML = `<div class="sub" style="margin-bottom:12px">Last ${d.days} days · ${d.fix_prs} merged PRs linked to bugs</div>
+      <div class="grid two"><div class="card"><div class="card-h"><h3>Files changed most by bug fixes</h3></div>${tbl(d.files, "path")}</div>
+        <div style="display:grid;gap:16px;align-content:start"><div class="card"><div class="card-h"><h3>Folders</h3></div>${tbl(d.folders.slice(0, 8), "folder")}</div>
+        <div class="card"><div class="card-h"><h3>Components with the most bugs</h3></div><div class="card-b"><div class="hbars" id="q-comp"></div></div></div></div></div>`;
+    hbars($("#q-comp"), d.components.map(c => ({label: c.component, n: c.bugs})));
+  }
+}
+
+/* ---------------------------------------------------------------- code health */
+const CI_CLS = {success: ["good", "Passing"], failure: ["critical", "Failing"], timed_out: ["critical", "Timed out"], cancelled: ["neutral", "Cancelled"],
+  in_progress: ["warning", "Running"], queued: ["warning", "Queued"]};
+const SEV_CLS = {critical: "critical", high: "serious", medium: "warning", low: "neutral"};
+async function renderCode() {
+  document.querySelectorAll("#code-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === codeView));
+  const body = $("#code-body");
+  if (!CONF.github_enabled) { body.innerHTML = '<div class="banner">Code health comes from GitHub. Turn on GitHub in <code>bugmonitor init</code>.</div>'; return; }
+  if (codeView === "ci") {
+    const d = await j("/api/ci");
+    if (!d.enabled) { body.innerHTML = '<div class="banner">Build tracking is off. Turn it on in Settings under Code health.</div>'; return; }
+    body.innerHTML = tiles([["Failing now", d.failing_now, "default-branch pipelines"], ["Success rate", d.success_rate == null ? "—" : d.success_rate + "%", "finished runs"],
+        ["Runs", d.runs, "last 2 weeks"], ["Passed on retry", d.flaky.length, "possible flaky tests"]]) + `
+      <div class="card"><div class="card-h"><h3>Pipelines</h3><span class="sub">${d.last_sync ? "checked " + ago(d.last_sync) + " ago" : "waiting for first check"}</span></div>
+        <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Workflow</th><th class="nosort">Branch</th><th class="nosort">State</th>
+          <th class="nosort">Success rate</th><th class="nosort">Median time</th><th class="nosort">Runs</th></tr></thead><tbody>
+        ${d.pipelines.map(p => `<tr data-href="${esc(p.url || "")}"><td><b>${esc(p.workflow)}</b> <span class="muted">${esc(p.repo.split("/")[1])}</span></td><td><span class="path">${esc(p.branch)}</span></td>
+          <td>${stBadge(...(CI_CLS[p.state] || ["neutral", p.state || "?"]))}${p.failed_in_a_row > 1 ? `<div class="sub">${p.failed_in_a_row} failures in a row</div>` : ""}</td>
+          <td class="num">${p.success_rate == null ? "—" : p.success_rate + "%"}</td><td class="num">${p.median_minutes == null ? "—" : p.median_minutes + " min"}</td><td class="num">${p.runs}</td></tr>`).join("")
+          || '<tr><td colspan="6" class="empty">No GitHub Actions runs on default branches yet.</td></tr>'}</tbody></table></div></div>
+      <div class="grid two mt"><div class="card"><div class="card-h"><h3>Recent failures</h3></div><div class="card-b"><div class="list">
+        ${d.recent_failures.map(f => `<div class="li"><div class="grow"><div class="t1"><a href="${esc(f.url)}" target="_blank">${esc(f.workflow)}</a> <span class="muted">${esc(f.repo.split("/")[1])} · ${esc(f.branch)}</span></div>
+          <div class="t2"><span class="path">${esc(f.sha)}</span> ${esc(f.message || "")} · ${esc(f.who || "")} · ${ago(f.created)} ago</div></div></div>`).join("") || emptyBox("No failures.")}</div></div></div>
+        <div class="card"><div class="card-h"><h3>Passed on retry</h3><span class="sub">same commit failed, then passed</span></div><div class="card-b"><div class="list">
+        ${d.flaky_by_workflow.map(f => `<div class="li"><div class="grow"><div class="t1">${esc(f.workflow)} <span class="muted">${esc(f.repo.split("/")[1])}</span></div></div><b class="num">${f.retries}×</b></div>`).join("") || emptyBox("No retries needed.")}</div></div></div></div>`;
+  } else if (codeView === "security") {
+    const d = await j("/api/security");
+    if (!d.enabled) { body.innerHTML = '<div class="banner">Security alerts are off. Turn them on in Settings under Code health.</div>'; return; }
+    body.innerHTML = tiles([["Critical", d.by_severity.critical, ""], ["High", d.by_severity.high, ""], ["Medium", d.by_severity.medium, ""],
+        ["Low", d.by_severity.low, ""], ["High or critical with no ticket", d.untracked, "not linked to Jira"]]) + `
+      <div class="card"><div class="card-h"><h3>Open alerts</h3><span class="sub">Dependabot and code scanning${d.last_sync ? " · checked " + ago(d.last_sync) + " ago" : ""}</span></div>
+        <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Severity</th><th class="nosort">Alert</th><th class="nosort">Repo</th><th class="nosort">Age</th><th class="nosort">Jira</th></tr></thead><tbody>
+        ${d.items.map(a => `<tr data-href="${esc(a.url || "")}"><td>${stBadge(SEV_CLS[a.severity] || "neutral", a.severity)}</td>
+          <td class="wrap"><b>${esc(a.package || "")}</b> ${esc(a.summary || "")}<div class="sub">${a.kind === "dependabot" ? "Dependency" : "Code scanning"}${a.cve ? " · " + esc(a.cve) : ""}</div></td>
+          <td class="muted">${esc(a.repo.split("/")[1])}</td><td class="num muted">${a.age_days != null ? days(a.age_days) : "—"}</td>
+          <td><div class="chips">${(a.jira_keys || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}</div></td></tr>`).join("")
+          || '<tr><td colspan="5" class="empty">No open security alerts (or no access to them with this token).</td></tr>'}</tbody></table></div></div>`;
+  } else {
+    const d = await j("/api/reviewers/mine");
+    body.innerHTML = `<div class="card"><div class="card-h"><h3>Suggested reviewers for your PRs</h3><span class="sub">people who know these files, with room to review</span></div>
+      <div class="card-b"><div class="list">${d.map(p => `<div class="li"><div class="grow"><div class="t1"><a class="key" href="#" data-pr="${esc(p.repo)}|${p.number}">${esc(p.repo.split("/")[1])}#${p.number}</a> ${esc(p.title)}</div>
+        ${p.suggestions.map(s => `<div class="t2"><b>${esc(s.name || s.login)}</b> <span class="muted">@${esc(s.login)}</span> · ${esc(s.reasons.join(", "))}</div>`).join("")}</div></div>`).join("")
+        || emptyBox("All your open PRs already have reviewers. Open any PR to see suggestions for it.")}</div></div></div>`;
+  }
+}
+
+/* ---------------------------------------------------------------- team: forecast, capacity, readiness */
+const VERDICT = {"On track": "good", "At risk": "warning", "Unlikely": "critical"};
+async function renderPlanning(v, body) {
+  if (v === "forecast") {
+    const d = await j("/api/forecast");
+    const fc = x => `<div class="rcard"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(x.name)}${x.project ? ` <span class="muted">${esc(x.project)}</span>` : ""}</b>${stBadge(VERDICT[x.verdict] || "neutral", x.verdict)}</div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap"><div><div class="big num">${x.probability == null ? "—" : x.probability + "%"}</div><div class="sub">chance to finish on time</div></div>
+        <div><div class="big num">${x.remaining}</div><div class="sub">${x.unit || "tickets"} left</div></div>
+        <div><div class="big num">${x.workdays_left ?? "—"}</div><div class="sub">workdays left</div></div></div>
+      <div class="sub">${x.likely_finish ? `Likely done ${fmtDate(x.likely_finish)}; 85% sure by ${fmtDate(x.safe_finish)}` : "Not enough finished work to forecast yet."}
+        ${x.release_date ? ` · release date ${fmtDate(x.release_date)}` : x.end ? ` · sprint ends ${fmtDate(x.end.slice(0, 10))}` : ""}</div></div>`;
+    body.innerHTML = `<div class="pad"><div class="sub" style="margin-bottom:12px">${esc(d.method)} About ${d.avg_per_day} tickets finish per workday.</div>
+      <h3 style="margin:0 0 8px">Sprints</h3><div class="rcards" style="padding:0 0 16px">${d.sprints.map(fc).join("") || emptyBox("No active sprint.")}</div>
+      <h3 style="margin:0 0 8px">Releases</h3><div class="rcards" style="padding:0 0 16px">${d.releases.map(fc).join("") || emptyBox("No unreleased versions with open work.")}</div>
+      <div class="card"><div class="card-h"><h3>Tickets finished per workday</h3></div><div class="card-b"><div class="chart" id="fc-tp"></div></div></div></div>`;
+    multiLine($("#fc-tp"), d.throughput.days.map((x, i) => ({date: x, done: d.throughput.tickets[i]})), [{key: "done", label: "Finished", color: "var(--series-1)"}], "Tickets finished per workday");
+  } else if (v === "capacity") {
+    const d = await j("/api/capacity");
+    const col = s => ({Over: "var(--critical)", Full: "var(--warning)", Room: "var(--good)", Away: "var(--neutral)"}[s]);
+    body.innerHTML = `<div class="sub pad" style="padding-bottom:0">${esc(d.basis[0].toUpperCase() + d.basis.slice(1))}: ${fmtDate(d.start)} to ${fmtDate(d.end)} · ${d.workdays} workdays ·
+        ${d.focus_hours_per_day}h focus a day · ${d.hours_per_point}h per point${d.unassigned ? ` · ${d.unassigned} unassigned ticket${d.unassigned === 1 ? "" : "s"}` : ""}. Add time off in Settings.</div>
+      <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Person</th><th class="nosort">Available</th><th class="nosort">Assigned</th><th class="nosort">Load</th><th class="nosort">Time off</th><th class="nosort">Work</th></tr></thead><tbody>
+      ${d.people.map(p => `<tr><td><b>${esc(p.person)}</b></td><td class="num">${p.available_hours}h</td><td class="num">${p.assigned_hours}h</td>
+        <td><div style="display:flex;gap:8px;align-items:center"><span class="load" style="width:100px"><i style="width:${Math.min(p.load_pct || 0, 100)}%;background:${col(p.state)}"></i></span>
+          <span class="num">${p.load_pct == null ? "—" : p.load_pct + "%"}</span> ${stBadge({Over: "critical", Full: "warning", Room: "good", Away: "neutral"}[p.state], p.state)}</div></td>
+        <td class="muted">${p.days_off.length ? p.days_off.map(fmtDate).join(", ") : "—"}</td>
+        <td class="wrap">${p.tickets.length ? `<details><summary class="sub" style="cursor:pointer">${p.tickets.length} ticket${p.tickets.length === 1 ? "" : "s"}</summary>
+          ${p.tickets.map(t => `<div class="sub"><a href="#" data-open="${esc(t.key)}">${esc(t.key)}</a> ${t.hours}h <span class="muted">(${esc(t.basis)})</span></div>`).join("")}</details>` : '<span class="muted">—</span>'}</td></tr>`).join("")
+        || '<tr><td colspan="6" class="empty">Add teammates in Settings to see capacity.</td></tr>'}</tbody></table></div>`;
+  } else {
+    const d = await j("/api/readiness");
+    const icon = c => c.ok === null ? stBadge("neutral", "Skipped") : c.ok ? stBadge("good", "Pass") : c.warning_only ? stBadge("warning", "Check") : stBadge("critical", "Not yet");
+    body.innerHTML = d.releases.length ? `<div class="rcards">${d.releases.map(r => `<div class="rcard">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.project)} ${esc(r.name)}</b>${r.ready ? stBadge("good", "Ready to release") : stBadge("serious", `${r.passed} of ${r.required} checks`)}</div>
+      <div class="sub">${r.release_date ? fmtDate(r.release_date) : "No release date"} · ${r.total} tickets</div>
+      <div>${r.checks.map(c => `<div class="check">${icon(c)}<div class="grow"><b>${esc(c.name)}</b>${c.detail ? ` <span class="sub">${esc(c.detail)}</span>` : ""}
+        ${c.items && c.items.length ? `<details><summary class="sub" style="cursor:pointer">${c.items.length} item${c.items.length === 1 ? "" : "s"}</summary>
+          ${c.items.slice(0, 30).map(t => `<div class="sub">${keyLink(t.key, t.url)} ${esc(t.summary || "")} ${t.status ? `<span class="pill">${esc(t.status)}</span>` : ""}</div>`).join("")}</details>` : ""}</div></div>`).join("")}</div>
+      <div><button class="btn" data-notes="version=${encodeURIComponent(r.name)}&project=${encodeURIComponent(r.project)}">Draft release notes</button></div></div>`).join("")}</div>`
+      : '<div class="empty" style="padding:32px">No unreleased versions with tickets in your scope.</div>';
+  }
+}
+
+/* ---------------------------------------------------------------- ticket drawer extras */
+async function ticketExtras(key) {
+  const box = $("#t-extra"); if (!box) return;
+  const x = await j("/api/insights/" + encodeURIComponent(key));
+  if (x.error || !$("#t-extra")) return;
+  const q = x.quality || {};
+  $("#t-actions").innerHTML = `
+    <button class="btn" data-start="${esc(key)}">Start work</button>
+    <button class="btn" data-${x.watching ? "unwatch" : "watch"}="${esc(key)}">${x.watching ? "Stop watching" : "Watch"}</button>
+    ${x.snoozed_until ? `<button class="btn" data-unsnooze="${esc(key)}" title="Snoozed until ${esc(new Date(x.snoozed_until).toLocaleString())}">Unsnooze</button>`
+      : `<select class="inline-in" data-snooze="${esc(key)}" aria-label="Snooze alerts"><option value="">Snooze alerts…</option><option value="4">4 hours</option><option value="24">1 day</option><option value="72">3 days</option><option value="168">1 week</option></select>`}
+    ${x.actions_allowed ? `<select class="inline-in" data-move="${esc(key)}" aria-label="Change status"><option value="">Change status…</option></select>
+      <button class="btn" data-act="assign_me|${esc(key)}">Assign to me</button><button class="btn" data-comment-open="${esc(key)}">Comment</button>` : ""}
+    <span class="msg" id="t-msg"></span>`;
+  if (x.actions_allowed) j(`/api/actions/${encodeURIComponent(key)}/transitions`).then(r => {
+    const sel = document.querySelector(`[data-move="${key}"]`);
+    if (sel && r.transitions) sel.innerHTML = '<option value="">Change status…</option>' + r.transitions.map(t => `<option value="${esc(t.id)}">${esc(t.to || t.name)}</option>`).join("");
+  }).catch(() => {});
+  box.innerHTML = `
+    ${x.sla ? `<div class="sect"><h4>SLA</h4><div class="kv">${slaStage("First response", x.sla.response)}${slaStage("Fix", x.sla.resolve)}</div></div>` : ""}
+    ${q.applies ? `<div class="sect"><h4>Bug report quality · ${q.score}/100</h4>
+      ${q.problems.length ? `<div class="chips" style="margin-bottom:8px">${q.problems.map(p => `<span class="chip">${esc(p.text)}</span>`).join("")}</div>
+        <textarea class="note-box" id="q-note">${esc(q.note)}</textarea>
+        <div class="actions" style="margin-top:6px"><button class="btn" data-copy-note>Copy note</button>
+        ${x.actions_allowed ? `<button class="btn" data-post-note="${esc(key)}">Post as Jira comment</button>` : ""}</div>` : stBadge("good", "Has steps, expected result, and environment")}</div>` : ""}
+    ${x.suspects.length ? `<div class="sect"><h4>Possible causes</h4><div class="sub" style="margin-bottom:6px">Changes shipped shortly before this was reported. Leads, not conclusions.</div>
+      ${x.suspects.map(s => `<div class="li" data-pr="${esc(s.repo)}|${s.number}" style="cursor:pointer"><div class="grow"><div class="t1">${esc(s.repo.split("/")[1])}#${s.number} ${esc(s.title)}</div>
+        <div class="t2">${esc(s.author || "")} · ${esc(s.reasons.join(" · "))}</div></div></div>`).join("")}</div>` : ""}
+    ${x.similar.length ? `<div class="sect"><h4>Similar finished tickets</h4>${x.similar.map(s => `<div class="li"><div class="grow">
+      <div class="t1">${keyLink(s.key, s.url)} ${esc(s.summary)}</div>
+      <div class="t2">${s.active_hours ? hrs(s.active_hours) + " hands-on · " : ""}${esc(s.assignee || "")}${s.prs.length ? " · fixed in " + s.prs.map(p => `<a href="${esc(p.url)}" target="_blank">#${p.number}</a>`).join(", ") : ""}</div></div>
+      <span class="sub num">${Math.round(s.similarity * 100)}% match</span></div>`).join("")}</div>` : ""}
+    <div id="t-start"></div>`;
+}
+
+async function showStart(key) {
+  const b = await j("/api/start/" + encodeURIComponent(key)), el = $("#t-start");
+  if (!el) return;
+  if (b.error) { el.innerHTML = `<div class="banner">${esc(b.error)}</div>`; return; }
+  el.innerHTML = `<div class="sect"><h4>Start work</h4><div class="est">
+    <div>Branch <span class="path">${esc(b.branch)}</span></div>
+    <pre class="cmd" id="git-cmd">${esc(b.git.join("\n"))}</pre>
+    <div class="actions" style="margin-top:8px"><button class="btn" data-copy-git>Copy commands</button>
+      <span class="sub">${esc(b.estimate || "")}</span></div>
+    <div class="sub" style="margin-top:8px">In Claude, ask to "start work on ${esc(b.key)}" to run these and start the timer.</div></div></div>`;
+  el.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+/* ---------------------------------------------------------------- global search */
+let gsTimer, gsSel = -1;
+async function runSearch(q) {
+  const panel = $("#gs-panel");
+  if (q.trim().length < 2) { panel.classList.remove("on"); return; }
+  const r = await j("/api/search?q=" + encodeURIComponent(q));
+  if ($("#gs").value !== q) return;
+  gsSel = -1;
+  panel.innerHTML = r.groups.map(g => `<div class="gs-g">${esc(g.type)}</div>${g.items.map(i => {
+    const attr = i.key && /^[A-Z][A-Z0-9_]+-\d+$/.test(i.key) && g.type !== "Security" ? `data-open="${esc(i.key)}"`
+      : i.number ? `data-pr="${esc(i.repo)}|${i.number}"` : i.url ? `data-href-out="${esc(i.url)}"` : "";
+    return `<a class="gs-i" href="#" ${attr}><div class="t1">${esc(i.title)}</div><div class="t2">${esc(i.subtitle || "")}</div></a>`; }).join("")}`).join("")
+    || '<div class="empty">No matches.</div>';
+  panel.classList.add("on");
+}
+function closeSearch() { $("#gs-panel").classList.remove("on"); $("#gsearch").classList.remove("open"); }
+
 /* ---------------------------------------------------------------- data + nav */
 async function refresh() {
   const [s, ov, issues, ghs, mine] = await Promise.all([j("/api/summary"), j("/api/overview?days=60"), j("/api/issues?scope=all"), j("/api/github/summary"), j("/api/mine")]);
@@ -1287,6 +1646,21 @@ async function refresh() {
   if (CONF.github_enabled) j("/api/deployments").then(d => { $("#c-deploys").textContent = d.running.length; $("#c-deploys").classList.toggle("hot", d.running.length > 0); }).catch(() => {});
   j("/api/timelog?days=1").then(t => { $("#c-time").textContent = `${t.days[0].logged_hours}h`; }).catch(() => {});
   if (view === "activity") renderActivity();
+  if (view === "day") renderDay();
+  counts2().catch(() => {});
+}
+
+async function counts2() {
+  const hot = (id, n, isHot) => { $(id).textContent = n; $(id).classList.toggle("hot", !!isHot); };
+  const sug = await j("/api/timelog/suggestions");
+  hot("#c-day", sug.items.length, false);
+  if (CONF.sla_enabled) { const sla = await j("/api/sla"); hot("#c-quality", sla.breached + sla.warn, sla.breached > 0); }
+  else { const q = await j("/api/quality"); hot("#c-quality", q.incomplete, false); }
+  if (CONF.github_enabled) {
+    const [ci, sec] = await Promise.all([j("/api/ci"), j("/api/security")]);
+    const bad = (ci.failing_now || 0) + (sec.by_severity ? sec.by_severity.critical + sec.by_severity.high : 0);
+    hot("#c-code", bad, bad > 0);
+  }
 }
 
 function show(v) {
@@ -1301,10 +1675,14 @@ function show(v) {
   if (v === "deploys") renderDeploys();
   if (v === "settings") renderSettings();
   if (v === "insights") renderInsights();
+  if (v === "day") renderDay();
+  if (v === "quality") renderQuality();
+  if (v === "code") renderCode();
 }
 
 document.addEventListener("click", async ev => {
   if (view === "settings" && ev.target.closest("#v-settings") && await settingsClick(ev)) return;
+  if (await clickV11(ev)) return;
   const lt = ev.target.closest("[data-logtime]");
   if (lt) {
     ev.stopPropagation();
@@ -1344,6 +1722,67 @@ document.addEventListener("click", async ev => {
   const th = ev.target.closest("#v-bugs th[data-s]");
   if (th) { const k = th.dataset.s; bSort = {k, d: bSort.k === k ? -bSort.d : -1}; return renderBugs(); }
 });
+async function clickV11(ev) {
+  const t = ev.target, c = sel => t.closest(sel);
+  const msg = (txt, ok = true) => { const m = $("#t-msg"); if (m) m.innerHTML = ok ? esc(txt) : `<span style="color:var(--critical-ink)">${esc(txt)}</span>`; };
+  if (c("#gs-btn")) { $("#gsearch").classList.toggle("open"); $("#gs").focus(); return true; }
+  const prLink = c("a[data-pr]");
+  if (prLink) { ev.preventDefault(); closeSearch(); const [r, n] = prLink.dataset.pr.split("|"); openPR(r, n); return true; }
+  if (c("#gs-panel")) {
+    const out = c("[data-href-out]");
+    if (out) { ev.preventDefault(); window.open(out.dataset.hrefOut, "_blank"); closeSearch(); return true; }
+    if (c("[data-open]") || c("[data-pr]")) { closeSearch(); return false; }   // the usual handlers open it
+    return true;
+  }
+  if (!c("#gsearch")) $("#gs-panel").classList.remove("on");
+  const qs = c("#q-seg button"); if (qs) { qView = qs.dataset.v; store.set("bm-q", qView); renderQuality(); return true; }
+  const cs = c("#code-seg button"); if (cs) { codeView = cs.dataset.v; store.set("bm-code", codeView); renderCode(); return true; }
+  if (t.id === "su-copy") { await copyText(STANDUP ? STANDUP.text : "", t); return true; }
+  if (t.id === "su-post" || t.id === "su-team") {
+    const r = await post("/api/standup/post", {team: t.id === "su-team"});
+    $("#su-msg").textContent = r.ok ? "Posted to your Teams chat." : (r.error || "Teams didn't accept the message."); return true; }
+  const wl = c("[data-wl-log]");
+  if (wl) { const [key, day, hours, comment] = wl.dataset.wlLog.split("|");
+    const r = await post("/api/timelog/log", {key, day, minutes: Math.round(+hours * 60), comment});
+    if (r.error) alert(r.error); renderDay(); return true; }
+  const sk = c("[data-wl-skip]"); if (sk) { const [key, day] = sk.dataset.wlSkip.split("|"); await post("/api/timelog/dismiss", {key, day}); renderDay(); return true; }
+  if (t.id === "watch-add") { const r = await post("/api/watch", {key: $("#watch-key").value}); if (r.error) alert(r.error); renderDay(); return true; }
+  const wa = c("[data-watch]"); if (wa) { await post("/api/watch", {key: wa.dataset.watch}); ticketExtras(wa.dataset.watch); return true; }
+  const uw = c("[data-unwatch]"); if (uw) { await post("/api/unwatch", {key: uw.dataset.unwatch}); view === "day" ? renderDay() : ticketExtras(uw.dataset.unwatch); return true; }
+  const us = c("[data-unsnooze]"); if (us) { await post("/api/unsnooze", {key: us.dataset.unsnooze}); view === "day" && !c("#drawer") ? renderDay() : ticketExtras(us.dataset.unsnooze); return true; }
+  const st = c("[data-start]"); if (st) { showStart(st.dataset.start); return true; }
+  if (c("[data-copy-git]")) { await copyText($("#git-cmd").textContent, t); return true; }
+  if (c("[data-copy-note]")) { await copyText($("#q-note").value, t); return true; }
+  const pn = c("[data-post-note]");
+  if (pn) { const r = await post("/api/actions", {key: pn.dataset.postNote, action: "comment", value: $("#q-note").value});
+    msg(r.ok ? "Comment posted to Jira." : r.error, !!r.ok); return true; }
+  const co = c("[data-comment-open]");
+  if (co) { const text = prompt(`Comment on ${co.dataset.commentOpen}:`); if (!text) return true;
+    const r = await post("/api/actions", {key: co.dataset.commentOpen, action: "comment", value: text}); msg(r.ok ? "Comment posted." : r.error, !!r.ok); return true; }
+  const ac = c("[data-act]");
+  if (ac) { const [action, key] = ac.dataset.act.split("|"); const r = await post("/api/actions", {key, action});
+    msg(r.ok ? "Assigned to you. The dashboard updates after the next sync." : r.error, !!r.ok); return true; }
+  return false;
+}
+document.addEventListener("change", async ev => {
+  const sn = ev.target.closest("[data-snooze]");
+  if (sn && sn.value) { await post("/api/snooze", {key: sn.dataset.snooze, hours: +sn.value}); ticketExtras(sn.dataset.snooze); }
+  const mv = ev.target.closest("[data-move]");
+  if (mv && mv.value) { const label = mv.options[mv.selectedIndex].text;
+    if (!confirm(`Move ${mv.dataset.move} to ${label}?`)) { mv.value = ""; return; }
+    const r = await post("/api/actions", {key: mv.dataset.move, action: "transition", value: mv.value});
+    const m = $("#t-msg"); if (m) m.textContent = r.ok ? `Moved to ${r.status}. The dashboard updates after the next sync.` : r.error; }
+});
+$("#gs").addEventListener("input", e => { clearTimeout(gsTimer); gsTimer = setTimeout(() => runSearch(e.target.value), 180); });
+$("#gs").addEventListener("keydown", e => {
+  const items = [...document.querySelectorAll("#gs-panel .gs-i")];
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); gsSel = Math.max(0, Math.min(items.length - 1, gsSel + (e.key === "ArrowDown" ? 1 : -1)));
+    items.forEach((x, i) => x.classList.toggle("sel", i === gsSel)); items[gsSel]?.scrollIntoView({block: "nearest"}); }
+  if (e.key === "Enter" && items.length) { e.preventDefault(); (items[gsSel] || items[0]).click(); }
+  if (e.key === "Escape") { closeSearch(); e.target.blur(); }
+});
+document.addEventListener("keydown", e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault();
+  if (innerWidth <= 760) $("#gsearch").classList.add("open"); $("#gs").focus(); } });
 ["#b-q", "#b-project", "#b-priority", "#b-status", "#b-assignee"].forEach(s => $(s).addEventListener("input", renderBugs));
 $("#ins-days").addEventListener("change", () => renderInsights());
 document.addEventListener("change", ev => { if (ev.target.id === "rep-who") { reportWho = ev.target.value; renderInsights(); } });

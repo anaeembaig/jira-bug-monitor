@@ -19,6 +19,8 @@ poll_minutes = 5          # how often to check Jira
 backfill_days = 90        # the first sync also loads recently resolved bugs, for estimates
 fetch_changelog = true    # full status history; needed for time in status and estimates
 fetch_comments = true     # needed for @mention alerts and comments in ticket details
+fetch_description = true  # needed for bug report checks, search, and similar tickets
+allow_actions = false     # let the dashboard and Claude move status, assign to you, and comment (audited)
 
 [alerts]
 new_bug = true
@@ -55,6 +57,8 @@ digest_personal = true
 digest_team = true
 weekly_report_day = ""    # e.g. "Friday": posts the weekly report to digest routes
 sync_health = true        # tells you when syncing keeps failing
+standup_time = ""         # e.g. "09:15": your standup note (yesterday, today, blockers) on workdays
+standup_team = false      # also post the team standup to routes with digest = true
 
 # GitHub: your PRs and branches with reviews, comments, and checks, linked to Jira by ticket key.
 # Classic token with the "repo" scope. If your org uses single sign-on, authorize the token for it.
@@ -80,6 +84,8 @@ pr_review_hours = 24
 boards = []               # Jira board IDs for sprints; blank = found from your projects
 story_points_field = ""   # blank = detected
 escape_labels = ["production", "prod", "customer", "escalation"]
+focus_hours_per_day = 6   # capacity: hours a person can spend on tickets on a normal day
+hours_per_point = 0       # capacity: 0 = learn from finished tickets
 
 [team.stuck_days]
 "*" = 5                   # any other in-progress status
@@ -92,13 +98,19 @@ escape_labels = ["production", "prod", "customer", "escalation"]
 # github = "github-login"
 # email = "name@example.com"
 
+# Time off, for Team > Capacity (also editable in Settings). Leave hours out for a full day.
+# [[team.time_off]]
+# name = "Jira display name"
+# start = "2026-11-02"
+# end = "2026-11-06"
+
 # Team Teams channels. In the channel: Workflows > "Post to a channel when a webhook
 # request is received", then paste the URL. Use "keychain:NAME" to keep it in the credential store.
 # [[routes]]
 # name = "front-end"
 # webhook = "https://..."
 # projects = ["PROJ"]
-# events = ["new_bug", "priority_raised", "reopened", "escalation", "stuck", "deployment"]
+# events = ["new_bug", "priority_raised", "reopened", "escalation", "stuck", "deployment", "sla", "ci", "security"]
 # min_priority = "Major"
 # digest = true
 # mention_assignee = true
@@ -133,6 +145,54 @@ workflow_keywords = ["deploy", "release"]   # Actions workflows to track live
 
 [deployments.aliases]
 # "prod-us-east-1" = "Production"
+
+# SLA timers for bugs: hours to first response (assigned, picked up, or answered) and to fix.
+[sla]
+enabled = false
+warn_at = 0.8             # warn at 80% of the time used (your tickets only)
+projects = []             # blank = every project you watch
+route = ""                # team channel for breaches ("" = only you, for your tickets)
+
+[sla.response_hours]
+Blocker = 2
+Highest = 2
+Critical = 4
+High = 8
+Major = 8
+Medium = 24
+Normal = 24
+Low = 72
+Minor = 72
+
+[sla.resolve_hours]
+Blocker = 24
+Highest = 24
+Critical = 48
+High = 120
+Major = 120
+Medium = 240
+Normal = 240
+Low = 480
+Minor = 480
+
+# Bug report checks: flags bugs missing details and drafts a note to the reporter.
+[quality]
+enabled = true
+min_description_words = 15
+require_steps = true
+require_expected = true
+require_environment = true
+require_version = false
+
+# Code health from GitHub: builds on default branches and security alerts.
+[code_health]
+ci = true
+ci_branches = ["main", "master", "develop"]
+ci_days = 14
+alert_ci_failures = true
+security = true           # Dependabot and code scanning; a classic token needs the "security_events" scope
+security_min_severity = "high"
+alert_security = true
 
 [dashboard]
 host = "127.0.0.1"        # this computer only

@@ -6,8 +6,8 @@ Bug Monitor runs on your own computer. Nothing is sent anywhere except the servi
 
 | Service | Access | Notes |
 |---|---|---|
-| Jira | Read-only | One exception: **Log time** adds a worklog, only when `[timelog] allow_jira_write = true`. Off by default, and every use is recorded in the audit log |
-| GitHub | Read-only | Pull requests, reviews, comments, checks, branches, deployments, and Actions runs |
+| Jira | Read-only | Two opt-in exceptions, both off by default and recorded in the audit log: **Log time** adds a worklog (`[timelog] allow_jira_write = true`), and ticket actions change status, assign, or comment (`[jira] allow_actions = true`) |
+| GitHub | Read-only | Pull requests, reviews, comments, checks, files changed, branches, deployments, Actions runs, and security alerts |
 | Teams, Slack, email | Send only | Messages go only to the webhooks and addresses you configure |
 
 ## Where Data Lives
@@ -21,7 +21,7 @@ Bug Monitor runs on your own computer. Nothing is sent anywhere except the servi
 ## Tokens
 
 - **Jira:** a classic API token from your Atlassian account. It has the same access as you; Bug Monitor only uses it to read, except for opt-in worklogs.
-- **GitHub:** a classic token with the `repo` scope (read-only use). Set an expiry. If your organization uses single sign-on, authorize the token for it.
+- **GitHub:** a classic token with the `repo` scope (read-only use), plus `security_events` for security alerts. Set an expiry. If your organization uses single sign-on, authorize the token for it.
 - **Revoking:** delete the token at id.atlassian.com or github.com/settings/tokens, then run `bugmonitor init` to add a new one.
 
 ## The Dashboard

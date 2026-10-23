@@ -24,6 +24,7 @@ PR_FIELDS = """
   comments(last: 20) { totalCount nodes { id author { login } body createdAt url } }
   reviewThreads(first: 50) { totalCount nodes { isResolved isOutdated path line
     comments(first: 1) { totalCount nodes { id author { login } body createdAt url } } } }
+  files(first: 80) { nodes { path additions deletions } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state
     contexts(first: 40) { nodes {
       ... on CheckRun { name conclusion status detailsUrl }
@@ -160,6 +161,30 @@ class GitHubClient:
 
     def run_jobs(self, repo: str, run_id: int) -> list[dict]:
         return self.rest(f"/repos/{repo}/actions/runs/{run_id}/jobs", {"per_page": 50}).get("jobs") or []
+
+    def ci_runs(self, repo: str, branch: str, since: str) -> list[dict]:
+        return (self.rest(f"/repos/{repo}/actions/runs", {"per_page": 60, "branch": branch, "created": f">={since}"})
+                .get("workflow_runs") or [])
+
+    def default_branch(self, repo: str) -> str | None:
+        return (self.rest(f"/repos/{repo}") or {}).get("default_branch")
+
+    def security_alerts(self, repo: str) -> dict:
+        """Open Dependabot and code scanning alerts. Repos without access or without the feature return []."""
+        out = {}
+        for kind, path in (("dependabot", "dependabot/alerts"), ("code_scanning", "code-scanning/alerts")):
+            r = self.s.get(f"https://api.github.com/repos/{repo}/{path}", params={"state": "open", "per_page": 100},
+                           timeout=self.timeout)
+            if r.ok and isinstance(r.json(), list):
+                out[kind] = r.json()
+                continue
+            text = (r.text or "").lower()
+            if r.status_code == 404 or (r.status_code == 403 and any(
+                    w in text for w in ("disabled", "not enabled", "must be enabled", "no analysis", "not authorized"))):
+                out[kind] = []      # the feature is off for this repo, or the token can't see it: nothing to show
+                continue
+            raise GitHubError(f"GitHub {r.status_code} on {repo} {kind} alerts: {r.text[:200]}")
+        return out
 
     def branches(self, repo: str) -> dict:
         owner, name = repo.split("/", 1)

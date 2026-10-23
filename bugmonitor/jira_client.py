@@ -1,4 +1,5 @@
-"""Minimal Jira Cloud REST v3 client (read-only)."""
+"""Minimal Jira Cloud REST v3 client. Writes are opt-in: worklogs ([timelog] allow_jira_write) and
+ticket actions ([jira] allow_actions)."""
 from __future__ import annotations
 
 import time
@@ -11,6 +12,7 @@ FIELDS = [
     "resolutiondate", "components", "labels", "timeoriginalestimate", "timespent",
     "project", "issuetype", "fixVersions",
 ]
+DETAIL_FIELDS = ["description", "environment", "versions"]
 
 
 class JiraError(RuntimeError):
@@ -42,7 +44,7 @@ class JiraClient:
                 raise JiraError("Jira rejected the credentials (401). Check email and API token.")
             if not r.ok:
                 raise JiraError(f"Jira {r.status_code} on {path}: {r.text[:300]}")
-            return r.json()
+            return {} if r.status_code == 204 else r.json()
         raise JiraError(f"Jira kept failing on {path} after retries")
 
     def myself(self) -> dict:
@@ -139,6 +141,23 @@ class JiraClient:
             start += len(issues)
             if not issues or start >= data.get("total", 0):
                 return
+
+    # ---- ticket actions (only used when [jira] allow_actions = true)
+    def transitions(self, key: str) -> list[dict]:
+        return self._request("GET", f"/rest/api/3/issue/{key}/transitions").get("transitions", [])
+
+    def transition(self, key: str, transition_id: str) -> dict:
+        return self._request("POST", f"/rest/api/3/issue/{key}/transitions",
+                             json={"transition": {"id": str(transition_id)}})
+
+    def assign(self, key: str, account_id: str | None) -> dict:
+        return self._request("PUT", f"/rest/api/3/issue/{key}/assignee", json={"accountId": account_id})
+
+    def add_comment(self, key: str, text: str) -> dict:
+        paras = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} if line else {"type": "paragraph"}
+                 for line in text.split("\n")]
+        return self._request("POST", f"/rest/api/3/issue/{key}/comment",
+                             json={"body": {"type": "doc", "version": 1, "content": paras}})
 
     def browse_url(self, key: str) -> str:
         return f"{self.base_url}/browse/{key}"

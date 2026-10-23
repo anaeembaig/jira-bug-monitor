@@ -214,15 +214,26 @@ def _local(ts):
     return t.astimezone() if t else None
 
 
-def list_issues(conn, scope: str = "all", limit: int = 2000) -> list[dict]:
-    """Every tracked bug (open, resolved, or all), most urgent first, with linked PRs."""
+def list_issues(conn, scope: str = "all", limit: int = 2000, settings=None) -> list[dict]:
+    """Every tracked bug (open, resolved, or all), most urgent first, with linked PRs (and SLA state when on)."""
     where = {"open": "status_category != 'done'", "resolved": "status_category = 'done'"}.get(scope, "1=1")
     rows = [row_to_dict(r) for r in conn.execute(
         f"SELECT {OPEN_FIELDS}, resolved, reporter FROM issues WHERE in_bugs=1 AND {where} "
         "ORDER BY status_category = 'done', urgency DESC, created DESC LIMIT ?", (int(limit),))]
     links = pr_links(conn)
+    sla_on = bool(settings and settings.sla.enabled)
+    if sla_on:
+        from .quality import sla_status
     for r in rows:
         r["prs"] = links.get(r["key"], [])
+        if sla_on and r["status_category"] != "done":
+            st = sla_status(conn, r, settings)
+            if st:
+                left = [x["left_hours"] for x in (st["response"], st["resolve"])
+                        if x and x["left_hours"] is not None and x["state"] != "met"]
+                r["sla"] = {"state": st["state"], "left_hours": min(left) if left else None,
+                            "stage": "response" if st["response"] and st["response"]["state"] in ("warn", "breached")
+                            else "fix"}
     return rows
 
 

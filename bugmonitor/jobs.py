@@ -22,6 +22,8 @@ def run_all(conn, settings: Settings, alerter: Alerter | None = None, now: datet
                      ("stuck", lambda: stuck_reminders(conn, settings, alerter)),
                      ("digests", lambda: digests(conn, settings, alerter, now)),
                      ("timelog", lambda: _timelog_reminder(conn, settings, alerter, now)),
+                     ("standup", lambda: standups(conn, settings, alerter, now)),
+                     ("sla", lambda: _sla(conn, settings, alerter)),
                      ("housekeeping", lambda: housekeeping(conn, settings))):
         try:
             out[name] = fn()
@@ -34,6 +36,38 @@ def run_all(conn, settings: Settings, alerter: Alerter | None = None, now: datet
 def _timelog_reminder(conn, settings, alerter, now):
     from .timelog import reminder
     return reminder(conn, settings, alerter, now)
+
+
+def _sla(conn, settings, alerter):
+    from .quality import sla_alerts
+    return sla_alerts(conn, settings, alerter)
+
+
+def standups(conn, settings: Settings, alerter: Alerter, now: datetime | None = None) -> list[str]:
+    """Your standup note to your private chat, and the team standup to digest channels, on workdays."""
+    from .timelog import is_workday
+    from .workflow import standup_card
+    now = now or datetime.now()
+    t = settings.notify.standup_time
+    if not t or not is_workday(settings, now.date()) or in_quiet_hours(settings.notify, now):
+        return []
+    h, m = (t + ":0").split(":")[:2]
+    if (now.hour, now.minute) < (int(h), int(m)):
+        return []
+    today, sent = now.date().isoformat(), []
+    if settings.alerts.teams_webhook and get_state(conn, "standup_personal") != today:
+        if alerter.post_card(settings.alerts.teams_webhook, standup_card(conn, settings)):
+            set_state(conn, "standup_personal", today)
+            sent.append("personal")
+    if settings.notify.standup_team and settings.team.members:
+        due = [r for r in settings.routes if r.digest and r.webhook and get_state(conn, f"standup_team:{r.name}") != today]
+        card = standup_card(conn, settings, team=True) if due else None
+        for r in due:
+            if alerter.post_card(r.webhook, card):
+                set_state(conn, f"standup_team:{r.name}", today)
+                sent.append(f"team:{r.name}")
+    conn.commit()
+    return sent
 
 
 def _once(conn, key: str) -> bool:
@@ -240,6 +274,16 @@ def housekeeping(conn, settings: Settings, force: bool = False) -> dict | None:
         "outbox": conn.execute("DELETE FROM outbox WHERE ts < ?", (cut(7),)).rowcount,
         "orphan_events": conn.execute("DELETE FROM events WHERE key NOT IN (SELECT key FROM issues)").rowcount,
         "orphan_comments": conn.execute("DELETE FROM jira_comments WHERE key NOT IN (SELECT key FROM issues)").rowcount,
+        # Bookkeeping that only matters while the thing it tracks is around.
+        "sla_state": conn.execute("DELETE FROM sync_state WHERE k LIKE 'sla:%' AND substr(k, 5, instr(substr(k, 5), ':') - 1) "
+                                  "NOT IN (SELECT key FROM issues WHERE status_category != 'done')").rowcount,
+        "ci_state": conn.execute("DELETE FROM sync_state WHERE k LIKE 'ci_alerted:%' AND CAST(substr(k, 12) AS INTEGER) "
+                                 "NOT IN (SELECT id FROM ci_runs)").rowcount,
+        "dismissed": conn.execute("DELETE FROM sync_state WHERE k LIKE 'wl_dismiss:%' AND v < ?", (cut(45),)).rowcount,
+        "deploy_retries": conn.execute("DELETE FROM sync_state WHERE k LIKE 'deploy_retry:%' AND substr(k, 14) "
+                                       "NOT IN (SELECT id FROM deployments WHERE tickets IS NULL)").rowcount,
+        "watch_errors": conn.execute("DELETE FROM sync_state WHERE k LIKE 'watch_error:%' AND "
+                                     "substr(k, 13) NOT IN (SELECT key FROM watches)").rowcount,
     }
     set_state(conn, "housekeeping", today)
     conn.commit()

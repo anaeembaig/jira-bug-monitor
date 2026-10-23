@@ -35,7 +35,102 @@ def _background_sync(settings: Settings) -> None:
 def _public_config(settings: Settings) -> dict:
     """What the dashboard needs to know about the setup, without any secrets."""
     return {"team_enabled": bool(settings.team.jql), "team": settings.team.name,
-            "github_enabled": settings.github.enabled, "members": len(settings.team.members)}
+            "github_enabled": settings.github.enabled, "members": len(settings.team.members),
+            "sla_enabled": settings.sla.enabled, "actions_allowed": settings.jira.allow_actions,
+            "can_log_time": settings.timelog.allow_jira_write, "ci_enabled": settings.github.enabled and settings.code.ci,
+            "security_enabled": settings.github.enabled and settings.code.security}
+
+
+def _jira(settings: Settings):
+    from .jira_client import JiraClient
+    j = settings.jira
+    return JiraClient(j.base_url, j.email, j.api_token)
+
+
+def _extra_get(conn, settings: Settings, path: str, q: dict):
+    """Workflow, quality, planning, and code health views. None = not one of these paths."""
+    from . import codehealth, planning, quality, timelog, workflow
+    simple = {
+        "/api/standup": lambda: workflow.standup(conn, settings),
+        "/api/standup/team": lambda: workflow.team_standup(conn, settings),
+        "/api/watches": lambda: {"watches": workflow.watches(conn), "snoozes": workflow.snoozes(conn)},
+        "/api/search": lambda: workflow.search(conn, q.get("q", "")),
+        "/api/quality": lambda: quality.quality_report(conn, settings),
+        "/api/sla": lambda: quality.sla_overview(conn, settings, int(q.get("days", 30))),
+        "/api/hotspots": lambda: quality.hotspots(conn, settings, int(q.get("days", 90))),
+        "/api/forecast": lambda: planning.forecast(conn, settings),
+        "/api/capacity": lambda: planning.capacity(conn, settings),
+        "/api/readiness": lambda: planning.readiness(conn, settings),
+        "/api/ci": lambda: codehealth.ci_overview(conn, settings),
+        "/api/security": lambda: codehealth.security_overview(conn, settings),
+        "/api/reviewers/mine": lambda: codehealth.my_review_suggestions(conn, settings),
+        "/api/reviewers": lambda: codehealth.reviewer_suggestions(conn, settings, q.get("repo", ""), int(q.get("number", 0))),
+        "/api/timelog/suggestions": lambda: {"items": timelog.suggestions(conn, settings, int(q.get("days", 7))),
+                                             "can_write": settings.timelog.allow_jira_write},
+    }
+    if path in simple:
+        return simple[path]()
+    if path == "/api/timelog/export.csv":
+        from .timelog import export_csv
+        team = q.get("team") == "1"
+        name = f"timesheet-{'team' if team else 'mine'}-{q.get('days', 14)}d.csv"
+        return export_csv(conn, settings, int(q.get("days", 14)), q.get("person"), team), "text/csv; charset=utf-8", name
+    m = re.fullmatch(r"/api/start/([A-Za-z0-9_-]+)", path)
+    if m:
+        return workflow.start_work(conn, settings, m.group(1))
+    m = re.fullmatch(r"/api/insights/([A-Za-z0-9_]+-\d+)", path)
+    if m:
+        key = m.group(1).upper()
+        t = service.get_ticket(conn, key)
+        if t.get("error"):
+            return t
+        return {"key": key, "quality": quality.quality_check(t, settings),
+                "sla": quality.sla_status(conn, t, settings) if settings.sla.enabled else None,
+                "similar": quality.similar_tickets(conn, key),
+                "suspects": quality.regression_suspects(conn, settings, key)
+                if (t.get("issuetype") or "").lower() == "bug" else [],
+                "watching": bool(conn.execute("SELECT 1 FROM watches WHERE key=?", (key,)).fetchone()),
+                "snoozed_until": (conn.execute("SELECT until FROM snoozes WHERE key=?", (key,)).fetchone() or [None])[0],
+                "actions_allowed": settings.jira.allow_actions}
+    m = re.fullmatch(r"/api/actions/([A-Za-z0-9_]+-\d+)/transitions", path)
+    if m:
+        try:
+            return workflow.ticket_action(conn, settings, _jira(settings), m.group(1), "transitions")
+        except Exception as e:
+            return {"error": str(e), "transitions": []}
+    return None
+
+
+def _extra_post(conn, settings: Settings, path: str, b: dict):
+    from . import workflow
+    if path == "/api/watch":
+        return workflow.watch(conn, b.get("key", ""), b.get("note", ""))
+    if path == "/api/unwatch":
+        return workflow.unwatch(conn, b.get("key", ""))
+    if path == "/api/snooze":
+        return workflow.snooze(conn, b.get("key", ""), float(b.get("hours", 24)), b.get("reason", ""))
+    if path == "/api/unsnooze":
+        return workflow.unsnooze(conn, b.get("key", ""))
+    if path == "/api/timelog/dismiss":
+        from .timelog import dismiss_suggestion
+        return dismiss_suggestion(conn, b.get("day", ""), b.get("key", ""))
+    if path == "/api/standup/post":
+        from .alerts import Alerter
+        if not settings.alerts.teams_webhook:
+            return {"error": "Your private Teams chat isn't set up yet."}
+        ok = Alerter(settings, conn).post_card(settings.alerts.teams_webhook,
+                                               workflow.standup_card(conn, settings, team=bool(b.get("team"))))
+        return {"ok": ok}
+    if path == "/api/actions":
+        try:
+            out = workflow.ticket_action(conn, settings, _jira(settings), b.get("key", ""), b.get("action", ""),
+                                         str(b.get("value", "")))
+        except Exception as e:
+            return {"error": str(e)}
+        if out.get("ok"):
+            threading.Thread(target=_background_sync, args=(settings,), daemon=True).start()
+        return out
+    return None
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -130,10 +225,21 @@ def make_handler(settings: Settings):
                 if u.path == "/api/timelog/team":
                     from .timelog import team_time
                     return self._json(team_time(conn, settings, int(q.get("days", 10))))
+                r = _extra_get(conn, settings, u.path, q)
+                if r is not None:
+                    if isinstance(r, tuple):        # (body, content type, filename)
+                        body, ctype, fname = r
+                        self.send_response(200)
+                        self.send_header("Content-Type", ctype)
+                        self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        return self.wfile.write(body.encode("utf-8-sig"))
+                    return self._json(r)
                 if u.path == "/api/mine":
                     return self._json(service.my_tickets(conn))
                 if u.path == "/api/issues":
-                    return self._json(service.list_issues(conn, q.get("scope", "all")))
+                    return self._json(service.list_issues(conn, q.get("scope", "all"), settings=settings))
                 if u.path == "/api/github/summary":
                     return self._json(dict(service.github_summary(conn),
                                            enabled=settings.github.enabled))
@@ -191,6 +297,9 @@ def make_handler(settings: Settings):
                     return self._json(log_to_jira(conn, settings, JiraClient(j.base_url, j.email, j.api_token),
                                                   b.get("key", ""), float(b.get("minutes", 0)), b.get("day"),
                                                   b.get("comment", "")))
+                r = _extra_post(conn, settings, u.path, self._body())
+                if r is not None:
+                    return self._json(r)
                 if u.path == "/api/sync":
                     threading.Thread(target=_background_sync, args=(settings,), daemon=True).start()
                     return self._json({"started": True})

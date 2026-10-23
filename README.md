@@ -9,15 +9,20 @@ The dashboard has these tabs:
 | Tab | What it shows |
 |---|---|
 | Overview | KPIs and charts for your bug scope: created vs. resolved, open bugs over time, by priority, status, assignee, and age |
+| My Day | Your standup (yesterday, today, blockers), worklogs you may have missed, your watch list, and reviewers for your PRs |
 | My Tickets | Everything assigned to you, any type, as a board, a table, or one tab per status, with time spent in every status |
-| Team | Team board by person and status, active sprint with burnup, release readiness, review queue, QA handoff, and stuck work |
+| Team | Team board, active sprint with burnup, releases, review queue, QA handoff, stuck work, forecast, capacity, and release readiness |
 | Time Log | Your hours per day from Jira worklogs, time tracked from Claude, and what you did on each ticket; the team's hours |
 | Deployments | Every environment: what's running now with step progress, the latest deploy to each, who deployed, what shipped, rollbacks |
 | Insights | Cycle time by stage, PR health, bug quality, estimate accuracy, delivery metrics, a weekly report, and triage help |
-| Bugs | Every tracked bug, open or resolved, with an urgency score and linked PRs |
+| Bugs | Every tracked bug, open or resolved, with an urgency score, SLA timer, and linked PRs |
+| Quality | Bug reports missing details, SLA breaches and compliance, and the code areas bugs come from |
 | GitHub | Your PRs with reviewers, comments, checks, and merge state; your branches |
+| Code Health | Builds on default branches, flaky runs, security alerts, and suggested reviewers |
 | Activity | Alerts, work in progress, and time tracked from Claude |
-| Settings (gear icon) | Your notifications, quiet hours, summaries, team Teams channels, teammates, and escalation rules |
+| Settings (gear icon) | Notifications, quiet hours, summaries, standup, SLA, report checks, code health, channels, teammates, time off, and escalations |
+
+Search everything from the box at the top (press `/`): tickets, descriptions, PRs, branches, deployments, worklog comments, work notes, and security alerts. Open any ticket for its SLA, report gaps, possible causes, similar finished tickets, and a **Start work** button with a branch name and git commands.
 
 Click any ticket, PR, or deployment for its full details: timeline, time in each status, fix estimate, linked PRs and branches, Jira comments, and every environment it reached.
 
@@ -109,7 +114,13 @@ Set everything up in the dashboard under **Settings** (the gear icon), or in the
 | Stuck work (too long in a status, or a PR waiting on review) | Yours, once | Once per item |
 | Escalation rules, e.g. Critical bug unassigned for 2 hours | If no channel is set | The rule's channel |
 | End-of-day time log reminder | When you're under your daily target | No |
+| A ticket on your watch list changes or gets a comment | Always | No |
+| SLA due soon (your tickets) or breached | Yours | Breaches, to the `[sla] route` channel and channels with the `sla` event |
+| A default-branch build breaks | If your commit broke it | Channels with the `ci` event |
+| New security alert at or above your severity | Always | Channels with the `security` event |
 | Bug Monitor can't sync (3 failures in a row) | Always | No |
+
+Snooze a ticket from its details to keep its alerts on the dashboard only for a few hours or days. Team channels aren't affected.
 
 ### Timing
 
@@ -136,6 +147,25 @@ The **Time Log** tab shows each day, newest first:
 
 Switch to **Team** for everyone's hours per day. To add worklogs from the dashboard or from Claude, set `allow_jira_write = true` under `[timelog]`. It's off by default, and each use is recorded in the audit log.
 
+Bug Monitor also suggests worklogs you probably forgot: time tracked from Claude that isn't in Jira, and tickets you worked on during days that are short of your target. Accept them on **My Day**. Export your timesheet, or the team's, as a CSV file for Excel from the Time Log tab.
+
+## Daily Workflow
+
+- **Standup:** set `standup_time` in Settings and your note arrives in your Teams chat on workdays. Copy it or post it from **My Day**. Turn on `standup_team` to post everyone's to digest channels.
+- **Start work:** in Claude, "start work on HUM-412" returns the description, gaps in the report, similar finished tickets and how they were fixed, possible causes, the SLA, a branch name that follows your naming, and git commands, and starts the timer.
+- **Watch list:** follow tickets you don't own and get alerts for status, assignee, priority, and comments.
+- **Ticket actions:** with `allow_actions = true` under `[jira]`, change status, assign to yourself, and comment from the dashboard or Claude. It's off by default, and each change is recorded in the audit log.
+
+## Quality and Planning
+
+- **Bug report checks** flag open bugs with no steps to reproduce, no expected result, or no environment, and draft a note to the reporter.
+- **SLA timers** track first response and fix time by priority. Turn them on in Settings and set the hours under `[sla]`.
+- **Possible causes** lists PRs merged or deployed in the two weeks before a bug was reported that touch the same area.
+- **Hotspots** shows the files and folders bug fixes change most.
+- **Forecast** replays the last 30 workdays of finished work 2,000 times to give the chance of finishing the sprint or release on time.
+- **Capacity** compares each person's focus hours, minus time off from Settings, with their remaining work.
+- **Release readiness** is a go/no-go checklist: tickets done, no high-priority bugs, PRs merged, QA finished, and deployed to a test environment.
+
 ## Deployments
 
 Bug Monitor reads GitHub deployments for every environment in your repos. GitHub Actions jobs that use `environment:` create these automatically. For each deploy it shows:
@@ -150,7 +180,7 @@ Each ticket's details list every environment it reached. A rollback removes the 
 
 ## Connect GitHub
 
-1. Create a classic token at <https://github.com/settings/tokens/new> with the **repo** scope.
+1. Create a classic token at <https://github.com/settings/tokens/new> with the **repo** scope. Add **security_events** for security alerts.
 2. If `tcp-software` uses single sign-on, open the token, choose **Configure SSO**, and authorize it for the organization.
 3. In `config.toml`, add the following:
 
@@ -187,6 +217,12 @@ Ask in plain language from any session:
 - "What did I work on yesterday, and what haven't I logged?"
 - "What's stuck on the team?" or "How's the sprint going?"
 - "Write my weekly report." or "Draft release notes for HUM 2026.11."
+- "What's my standup?" or "Start work on HUM-412."
+- "Watch HUM-500." or "Snooze HUM-388 for a day."
+- "Which bug reports are missing details?" or "What might have caused HUM-412?"
+- "Are we going to make the sprint?" or "Is 2026.11 ready to release?"
+- "Is main green?" or "Who should review my PR?"
+- "What time haven't I logged this week?" or "Export my timesheet for the last two weeks."
 
 ### Available Tools
 
@@ -214,6 +250,16 @@ Ask in plain language from any session:
 | `deployments`, `ticket_deployments` | Deploys across environments, and where a ticket has been deployed |
 | `delivery_metrics`, `engineering_insights` | Delivery (DORA) metrics, cycle time, PR health, bug quality, estimate accuracy |
 | `weekly_report`, `draft_release_notes`, `triage_help` | Ready-to-share report, release notes, duplicate and assignment suggestions |
+| `my_standup`, `team_standup` | Yesterday, today, and blockers, for you or per teammate |
+| `start_work` | A brief to start a ticket, with branch name and git commands; starts the timer |
+| `watch_ticket`, `snooze_ticket` | Follow a ticket, or mute its alerts for a while |
+| `search_everything` | Searches tickets, PRs, branches, deployments, worklogs, notes, and security alerts |
+| `ticket_action` | Changes status, assigns, or comments (only with `allow_actions = true`) |
+| `bug_report_quality`, `similar_tickets`, `regression_suspects` | Report gaps, similar finished tickets, and possible causes |
+| `sla_status`, `bug_hotspots` | SLA timers and compliance, and where bugs come from |
+| `delivery_forecast`, `team_capacity`, `release_readiness` | Sprint and release forecast, capacity, and go/no-go checks |
+| `ci_health`, `suggest_reviewers`, `security_alerts` | Builds, reviewer suggestions, and security alerts |
+| `suggested_worklogs`, `export_timesheet` | Worklogs you may have missed, and a CSV timesheet |
 | `sync_now` | Pulls from Jira and GitHub right away |
 
 Each entry records whether it came from `claude-cli` or `claude-desktop`.
@@ -276,4 +322,4 @@ In a git checkout, use `.venv/bin/python -m bugmonitor` in place of `bugmonitor`
 
 ## Security
 
-Read-only access to Jira and GitHub (except opt-in worklogs), tokens in your credential store, a dashboard that only listens on this computer, and automatic cleanup of old data. See [SECURITY.md](SECURITY.md).
+Read-only access to Jira and GitHub (except opt-in worklogs and ticket actions), tokens in your credential store, a dashboard that only listens on this computer, and automatic cleanup of old data. See [SECURITY.md](SECURITY.md).

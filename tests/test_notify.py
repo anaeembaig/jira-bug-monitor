@@ -131,6 +131,7 @@ def test_stuck_reminders_once_and_digests(env):
 def test_sync_failure_alert_after_three(env, monkeypatch):
     from bugmonitor import sync as sync_mod
     s, conn, posts = env
+    s.timelog.reminder_time = ""          # keep the end-of-day reminder out of this test at any clock time
     calls = {"n": 0}
 
     class Stop(Exception):

@@ -17,13 +17,20 @@ EDITABLE = {
                "my_status_changes": bool, "mentions": bool, "stuck_reminders": bool, "desktop": bool,
                "external_min_priority": str},
     "notify": {"quiet_hours": str, "quiet_weekends": bool, "urgent_bypasses_quiet": bool, "digest_time": str,
-               "digest_personal": bool, "digest_team": bool, "weekly_report_day": str, "sync_health": bool},
+               "digest_personal": bool, "digest_team": bool, "weekly_report_day": str, "sync_health": bool,
+               "standup_time": str, "standup_team": bool},
     "timelog": {"enabled": bool, "daily_target_hours": float, "reminder_time": str, "recap_in_digest": bool,
                 "workdays": list, "allow_jira_write": bool},
     "deployments": {"alert_my_tickets": bool, "alert_failures": bool, "alert_rollbacks": bool},
-    "team": {"name": str, "pr_review_hours": float},
+    "team": {"name": str, "pr_review_hours": float, "focus_hours_per_day": float, "hours_per_point": float},
     "github": {"alerts_to_external": bool},
+    "sla": {"enabled": bool, "warn_at": float, "route": str},
+    "quality": {"enabled": bool, "min_description_words": int, "require_steps": bool, "require_expected": bool,
+                "require_environment": bool, "require_version": bool},
+    "code_health": {"ci": bool, "alert_ci_failures": bool, "security": bool, "alert_security": bool,
+                    "security_min_severity": str},
 }
+SEVERITIES = ("low", "medium", "high", "critical")
 TIME_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
 NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]{1,40}$")
 
@@ -31,7 +38,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]{1,40}$")
 def public(settings: Settings) -> dict:
     """Everything the Settings tab shows. Webhook URLs and tokens are reduced to 'set' or 'not set'."""
     section = {"alerts": settings.alerts, "notify": settings.notify, "timelog": settings.timelog,
-               "deployments": settings.deploy, "team": settings.team, "github": settings.github}
+               "deployments": settings.deploy, "team": settings.team, "github": settings.github,
+               "sla": settings.sla, "quality": settings.quality, "code_health": settings.code}
     values = {s: {k: getattr(obj, k) for k in EDITABLE[s]} for s, obj in section.items()}
     return {
         "values": values,
@@ -39,13 +47,14 @@ def public(settings: Settings) -> dict:
                     "digest": r.digest, "mention_assignee": r.mention_assignee, "webhook_set": bool(r.webhook)}
                    for r in settings.routes],
         "members": settings.team.members,
+        "time_off": [{k: str(t.get(k) or "") for k in ("name", "start", "end", "hours")} for t in settings.team.time_off],
         "escalations": [{"name": e.name, "min_priority": e.min_priority, "unassigned_hours": e.unassigned_hours,
                          "open_hours": e.open_hours, "projects": e.projects, "route": e.route}
                         for e in settings.escalations],
         "secrets": {k: bool(v) for k, v in settings.secret_sources.items()},
         "private_webhook_set": bool(settings.alerts.teams_webhook),
         "priorities": settings.priority_order,
-        "events": ["new_bug", "priority_raised", "reopened", "escalation", "stuck", "deployment"],
+        "events": ["new_bug", "priority_raised", "reopened", "escalation", "stuck", "deployment", "sla", "ci", "security"],
         "config_file": str(settings.config_file),
     }
 
@@ -58,13 +67,24 @@ def _coerce(kind, v):
         if not 0 <= f <= 1000:
             raise ValueError("number out of range")
         return f
+    if kind is int:
+        i = int(float(v))
+        if not 0 <= i <= 10000:
+            raise ValueError("number out of range")
+        return i
     if kind is list:
         return [str(x)[:20] for x in (v or [])][:7]
     return str(v or "")[:200]
 
 
 def _validate(section: str, key: str, value):
-    if key in ("digest_time", "reminder_time") and value and not TIME_RE.match(value):
+    if key == "workdays" and not value:
+        raise ValueError("Pick at least one workday")
+    if key == "warn_at" and not 0.1 <= value <= 1:
+        raise ValueError("Warn at must be between 0.1 and 1 (for example 0.8 = 80% of the time used)")
+    if key == "security_min_severity" and value not in SEVERITIES:
+        raise ValueError("Security severity must be low, medium, high, or critical")
+    if key in ("digest_time", "reminder_time", "standup_time") and value and not TIME_RE.match(value):
         raise ValueError(f"{key} must look like 09:30")
     if key == "quiet_hours" and value:
         parts = value.split("-")
@@ -135,6 +155,27 @@ def save(conn, settings: Settings, body: dict) -> dict:
                         "email": (m.get("email") or "").strip()[:120]} for m in body["members"] if (m.get("name") or "").strip()]
             _replace_table_array(path, "team.members", members)
             changed.append(f"{len(members)} teammate(s)")
+
+        if "time_off" in body:
+            from datetime import date
+            rows = []
+            for t in body["time_off"]:
+                name = (t.get("name") or "").strip()[:80]
+                if not name:
+                    continue
+                try:
+                    a = date.fromisoformat(str(t.get("start") or ""))
+                    b = date.fromisoformat(str(t.get("end") or t.get("start")))
+                except ValueError:
+                    raise ValueError(f"Time off for {name} needs dates like 2026-11-02")
+                if b < a:
+                    raise ValueError(f"Time off for {name} ends before it starts")
+                row = {"name": name, "start": a.isoformat(), "end": b.isoformat()}
+                if str(t.get("hours") or "").strip():
+                    row["hours"] = float(t["hours"])
+                rows.append(row)
+            _replace_table_array(path, "team.time_off", rows)
+            changed.append(f"{len(rows)} time off entr{'y' if len(rows) == 1 else 'ies'}")
 
         if "escalations" in body:
             esc = [{"name": (e.get("name") or "Escalation").strip()[:60], "min_priority": e.get("min_priority") or "Critical",

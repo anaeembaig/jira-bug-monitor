@@ -312,3 +312,89 @@ def recap_lines(conn, settings: Settings) -> list[str]:
         lines.append("Worked on but not logged: " + ", ".join(prev["unlogged_tickets"][:6]))
     lines.append(f"This week: {ts['week']['logged']:g}h of {ts['week']['target']:g}h")
     return lines
+
+
+# --------------------------------------------------------------------------- export
+def export_csv(conn, settings: Settings, days: int = 14, person: str | None = None, team: bool = False) -> str:
+    """Worklogs as CSV (opens in Excel): one row per person, day, and ticket."""
+    import csv
+    import io
+    today = datetime.now().astimezone().date()
+    first = today - timedelta(days=max(int(days), 1) - 1)
+    since = datetime.combine(first, datetime.min.time()).astimezone().astimezone(timezone.utc).isoformat()
+    me_name, me_id = get_state(conn, "jira_me") or "", get_state(conn, "jira_me_id") or ""
+    q = "SELECT key, author, author_id, started, seconds, comment FROM worklogs WHERE started >= ?"
+    args: list = [since]
+    if not team:
+        if person and person != me_name:
+            q += " AND author=?"; args.append(person)
+        elif me_id:
+            q += " AND author_id=?"; args.append(me_id)
+        else:
+            q += " AND author=?"; args.append(me_name)
+    grid: dict = {}
+    for w in conn.execute(q, args):
+        k = (_local_day(w["started"]), w["author"] or "", w["key"])
+        g = grid.setdefault(k, {"seconds": 0, "comments": []})
+        g["seconds"] += w["seconds"] or 0
+        if w["comment"]:
+            g["comments"].append(w["comment"])
+    def cell(v):            # keep Excel from running text as a formula
+        v = "" if v is None else str(v)
+        return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+    buf = io.StringIO()
+    out = csv.writer(buf)
+    out.writerow(["Date", "Person", "Ticket", "Summary", "Project", "Type", "Hours", "Comments"])
+    total = 0.0
+    for (day, who, key) in sorted(grid):
+        t = _ticket(conn, key)
+        hours = round(grid[(day, who, key)]["seconds"] / 3600, 2)
+        total += hours
+        out.writerow([day, cell(who), cell(key), cell(t.get("summary")), cell(t.get("project") or key.split("-")[0]),
+                      cell(t.get("issuetype")), f"{hours:g}", cell(" | ".join(grid[(day, who, key)]["comments"])[:500])])
+    out.writerow(["Total", "", "", "", "", "", f"{round(total, 2):g}", ""])
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- suggested worklogs
+def _quarter(h: float) -> float:
+    return max(0.25, round(h * 4) / 4)
+
+
+def suggestions(conn, settings: Settings, days: int = 7) -> list[dict]:
+    """Worklogs you probably forgot: Claude-tracked time not yet logged, and tickets you worked on
+    (status changes, PRs, reviews, comments) on days that are short of your target."""
+    sheet = timesheet(conn, settings, days)
+    today = datetime.now().astimezone().date().isoformat()
+    out = []
+    for day in sheet["days"]:
+        if not day["workday"] and not day["tickets"]:
+            continue
+        shortfall = max(day["target_hours"] - day["logged_hours"], 0)
+        candidates = []
+        for t in day["tickets"]:
+            if get_state(conn, f"wl_dismiss:{day['date']}:{t['key']}"):
+                continue
+            gap = t["tracked_hours"] - t["logged_hours"]
+            if gap >= 0.25:
+                out.append({"date": day["date"], "key": t["key"], "summary": t["summary"], "url": t["url"],
+                            "hours": _quarter(gap), "reason": f"{t['tracked_hours']:.1f}h tracked in Claude",
+                            "comment": "; ".join(t["activity"])[:200]})
+                shortfall = max(shortfall - gap, 0)
+            elif not t["logged_hours"] and t["activity"]:
+                candidates.append(t)
+        if candidates and shortfall >= 0.25 and day["date"] <= today:
+            weight = sum(len(t["activity"]) for t in candidates)
+            for t in candidates:
+                h = min(shortfall * len(t["activity"]) / weight, 4)
+                out.append({"date": day["date"], "key": t["key"], "summary": t["summary"], "url": t["url"],
+                            "hours": _quarter(h), "reason": "you worked on it: " + ", ".join(t["activity"][:3]),
+                            "comment": "; ".join(t["activity"])[:200]})
+    return out
+
+
+def dismiss_suggestion(conn, day: str, key: str) -> dict:
+    from .db import set_state
+    set_state(conn, f"wl_dismiss:{day}:{key.upper()}", now_iso())
+    conn.commit()
+    return {"ok": True}

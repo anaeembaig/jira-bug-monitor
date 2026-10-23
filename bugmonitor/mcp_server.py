@@ -32,7 +32,10 @@ mcp = FastMCP(
         "Local Jira bug monitor. Use bug_summary or list_open_bugs for the live picture, "
         "list_new_bugs for recent arrivals, get_ticket for one ticket's full history and fix "
         "estimate, and log_work whenever the user starts, pauses, or finishes work on a ticket "
-        "so their records stay complete across sessions."
+        "so their records stay complete across sessions. When the user starts a ticket, use "
+        "start_work. For 'what did I do' or standup questions use my_standup. Use "
+        "search_everything when unsure where something is. Confirm before ticket_action or "
+        "log_time_to_jira, since those change Jira."
     ),
 )
 
@@ -277,6 +280,182 @@ def my_branches() -> list[dict]:
 def github_summary() -> dict:
     """Counts: your open PRs by status, PRs waiting on your review, failing checks."""
     return service.github_summary(conn)
+
+
+# --------------------------------------------------------------------------- daily workflow
+@mcp.tool()
+def my_standup() -> dict:
+    """Your standup: what you did since the last workday (worklogs, status changes, PRs, reviews,
+    Claude work notes), what's next today, and blockers. Includes ready-to-paste text."""
+    from .workflow import standup
+    return standup(conn, settings)
+
+
+@mcp.tool()
+def team_standup() -> dict:
+    """Per teammate: what changed since the last workday, what's in progress, and what's stuck."""
+    from .workflow import team_standup as ts
+    return ts(conn, settings)
+
+
+@mcp.tool()
+def start_work(key: str, start_timer: bool = True) -> dict:
+    """Start on a ticket: description, report gaps, recent comments, linked PRs and branches, similar
+    finished tickets and how they were fixed, likely regression causes, SLA, estimate, and a branch
+    name that follows your naming, with git commands. start_timer logs a 'start' work entry.
+    Run the git commands for the user if they want, then use log_work as work continues."""
+    from .workflow import start_work as sw
+    return sw(conn, settings, key, actor=ACTOR, session=SESSION, start_timer=start_timer)
+
+
+@mcp.tool()
+def watch_ticket(key: str, note: str = "", stop: bool = False) -> dict:
+    """Follow a ticket you don't own: alerts for its status, assignee, priority, and comments.
+    stop=True removes it from the watch list."""
+    from .workflow import unwatch, watch
+    return unwatch(conn, key) if stop else watch(conn, key, note)
+
+
+@mcp.tool()
+def snooze_ticket(key: str, hours: float = 24, stop: bool = False) -> dict:
+    """Mute your alerts for a ticket for N hours (team channels aren't affected). stop=True un-mutes."""
+    from .workflow import snooze, unsnooze
+    return unsnooze(conn, key) if stop else snooze(conn, key, hours)
+
+
+@mcp.tool()
+def search_everything(query: str) -> dict:
+    """Search tickets (key, summary, description, assignee), PRs, branches, deployments (sha,
+    environment, ticket), worklog comments, Claude work notes, and security alerts."""
+    from .workflow import search
+    return search(conn, query)
+
+
+@mcp.tool()
+def ticket_action(key: str, action: str, value: str = "") -> dict:
+    """Change a Jira ticket for the user. action: transitions (list options), transition (value =
+    target status or transition name), assign_me, unassign, comment (value = text).
+    Needs [jira] allow_actions = true. Always confirm with the user before changing a ticket."""
+    from .workflow import ticket_action as act
+    if action != "transitions" and not settings.jira.allow_actions:
+        return {"error": "Ticket actions are off. Set allow_actions = true under [jira] in config.toml."}
+    try:
+        client = JiraClient(settings.jira.base_url, settings.jira.email, settings.jira.api_token)
+        return act(conn, settings, client, key, action, value)
+    except JiraError as e:
+        return {"error": str(e)}
+
+
+# --------------------------------------------------------------------------- bug quality
+@mcp.tool()
+def bug_report_quality(key: str | None = None) -> dict:
+    """With a key: what that bug report is missing (steps, expected result, environment...) and a
+    drafted note for the reporter. Without: every open bug with gaps, by problem and reporter."""
+    from .quality import quality_check, quality_report
+    if key:
+        t = service.get_ticket(conn, key)
+        return t if t.get("error") else quality_check(t, settings)
+    return quality_report(conn, settings)
+
+
+@mcp.tool()
+def regression_suspects(key: str) -> list[dict]:
+    """PRs merged or deployed in the two weeks before this bug was reported that touch the same area,
+    with reasons. Use them as leads, not conclusions."""
+    from .quality import regression_suspects as rs
+    return rs(conn, settings, key)
+
+
+@mcp.tool()
+def similar_tickets(key: str) -> list[dict]:
+    """Finished tickets most like this one, with hands-on hours and the PRs that fixed them."""
+    from .quality import similar_tickets as st
+    return st(conn, key, limit=8)
+
+
+@mcp.tool()
+def sla_status(key: str | None = None) -> dict:
+    """SLA response and fix timers. With a key: that ticket. Without: breached and at-risk bugs and
+    compliance over the last 30 days. Needs [sla] enabled = true."""
+    from .quality import sla_overview, sla_status as one
+    if key:
+        t = service.get_ticket(conn, key)
+        return t if t.get("error") else (one(conn, t, settings) or {"note": "No SLA target for this priority."})
+    return sla_overview(conn, settings)
+
+
+@mcp.tool()
+def bug_hotspots(days: int = 90) -> dict:
+    """Files and folders most often changed by bug-fix PRs, and components with the most bugs."""
+    from .quality import hotspots
+    return hotspots(conn, settings, days)
+
+
+# --------------------------------------------------------------------------- planning
+@mcp.tool()
+def delivery_forecast() -> dict:
+    """Monte Carlo forecast for the active sprint and upcoming releases: chance of finishing on time,
+    likely and safe finish dates, from the last 30 workdays of throughput."""
+    from .planning import forecast
+    return forecast(conn, settings)
+
+
+@mcp.tool()
+def team_capacity() -> dict:
+    """Each teammate's available focus hours (minus time off) against the remaining work assigned to
+    them in the active sprint (or the next 10 workdays)."""
+    from .planning import capacity
+    return capacity(conn, settings)
+
+
+@mcp.tool()
+def release_readiness() -> dict:
+    """Go/no-go checklist per unreleased version: tickets done, no high-priority bugs, PRs merged,
+    QA finished, deployed to a test environment, code linked, release date."""
+    from .planning import readiness
+    return readiness(conn, settings)
+
+
+# --------------------------------------------------------------------------- code health
+@mcp.tool()
+def ci_health() -> dict:
+    """GitHub Actions on default branches: what's failing now, success rates, build times, flaky
+    runs (passed on retry), and recent failures."""
+    from .codehealth import ci_overview
+    return ci_overview(conn, settings)
+
+
+@mcp.tool()
+def suggest_reviewers(repo: str | None = None, number: int | None = None) -> dict | list:
+    """Reviewers who know the changed files and have room to review. With repo and number: that PR.
+    Without: your open PRs that have no reviewer yet."""
+    from .codehealth import my_review_suggestions, reviewer_suggestions
+    if repo and number:
+        return reviewer_suggestions(conn, settings, repo, number)
+    return my_review_suggestions(conn, settings)
+
+
+@mcp.tool()
+def security_alerts() -> dict:
+    """Open Dependabot and code scanning alerts across your repos, by severity, with linked Jira tickets."""
+    from .codehealth import security_overview
+    return security_overview(conn, settings)
+
+
+# --------------------------------------------------------------------------- time
+@mcp.tool()
+def suggested_worklogs(days: int = 7) -> list[dict]:
+    """Worklogs the user probably forgot to log, with hours and a comment. Offer to log them with
+    log_time_to_jira after the user confirms."""
+    from .timelog import suggestions
+    return suggestions(conn, settings, days)
+
+
+@mcp.tool()
+def export_timesheet(days: int = 14, team: bool = False, person: str | None = None) -> str:
+    """Worklogs as CSV (date, person, ticket, summary, hours, comments). Save it as a .csv file for Excel."""
+    from .timelog import export_csv
+    return export_csv(conn, settings, days, person, team)
 
 
 @mcp.tool()

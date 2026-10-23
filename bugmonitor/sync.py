@@ -35,6 +35,9 @@ def map_issue(raw: dict, client: JiraClient, custom: dict | None = None) -> dict
         "story_points": points if isinstance(points, (int, float)) else None,
         "fix_versions": [v.get("name") for v in f.get("fixVersions") or [] if isinstance(v, dict)],
         "_comments": ((f.get("comment") or {}).get("comments") or []),
+        "description": _rich_text(f.get("description"))[:6000] or None,
+        "environment": _rich_text(f.get("environment"))[:1000] or None,
+        "affects_versions": [v.get("name") for v in f.get("versions") or [] if isinstance(v, dict)],
         "key": raw["key"],
         "id": raw.get("id"),
         "project": _name(f.get("project"), "key"),
@@ -57,11 +60,19 @@ def map_issue(raw: dict, client: JiraClient, custom: dict | None = None) -> dict
     }
 
 
+def _rich_text(value) -> str:
+    """Jira rich text (ADF) or plain text, flattened."""
+    if isinstance(value, dict):
+        return _adf_text(value, []).strip()
+    return (value or "").strip() if isinstance(value, str) else ""
+
+
 UPSERT_COLS = ["key", "id", "project", "issuetype", "summary", "status", "status_category",
                "priority", "assignee", "assignee_id", "reporter", "created", "updated", "resolved",
                "components", "labels", "original_estimate_sec", "time_spent_sec", "url", "urgency",
                "reopen_count", "first_seen", "last_synced", "in_bugs", "in_mine", "in_team",
-               "story_points", "sprint_ids", "fix_versions"]
+               "story_points", "sprint_ids", "fix_versions", "in_watch", "description", "environment",
+               "affects_versions"]
 
 
 def _upsert(conn, d: dict, first_seen: str | None, scope: str) -> None:
@@ -69,9 +80,11 @@ def _upsert(conn, d: dict, first_seen: str | None, scope: str) -> None:
     vals = dict(d, components=json.dumps(d["components"]), labels=json.dumps(d["labels"]),
                 sprint_ids=json.dumps(d.get("sprint_ids") or []),
                 fix_versions=json.dumps(d.get("fix_versions") or []),
+                affects_versions=json.dumps(d.get("affects_versions") or []),
                 first_seen=first_seen, last_synced=now_iso(),
-                in_bugs=int(scope == "bugs"), in_mine=int(scope == "mine"), in_team=int(scope == "team"))
-    keep = {"key", "first_seen", "in_bugs", "in_mine", "in_team"}
+                in_bugs=int(scope == "bugs"), in_mine=int(scope == "mine"), in_team=int(scope == "team"),
+                in_watch=int(scope == "watch"))
+    keep = {"key", "first_seen", "in_bugs", "in_mine", "in_team", "in_watch"}
     conn.execute(
         f"INSERT INTO issues({','.join(UPSERT_COLS)}) VALUES({','.join('?' * len(UPSERT_COLS))}) "
         f"ON CONFLICT(key) DO UPDATE SET "
@@ -146,6 +159,10 @@ class _Ctx:
         self.extra = [f for f in (self.custom.get("sprint"), self.custom.get("points")) if f]
         if settings.jira.fetch_comments:
             self.extra.append("comment")
+        if settings.jira.fetch_description:
+            from .jira_client import DETAIL_FIELDS
+            self.extra += DETAIL_FIELDS
+        self.watched = {r[0] for r in conn.execute("SELECT key FROM watches")}
         self.stats = {"seen": 0, "new": 0, "changed": 0, "alerts": 0, "removed": 0,
                       "first_sync": False, "mine": 0, "team": 0}
 
@@ -203,7 +220,7 @@ def _adf_text(node, mentions: list) -> str:
     return inner + ("\n" if t in ("paragraph", "heading", "listItem", "codeBlock") else "")
 
 
-def _store_comments(ctx: "_Ctx", d: dict, quiet: bool) -> None:
+def _store_comments(ctx: "_Ctx", d: dict, quiet: bool, new_ticket: bool = False) -> None:
     conn = ctx.conn
     for c in d.get("_comments") or []:
         if not c.get("id"):
@@ -222,6 +239,10 @@ def _store_comments(ctx: "_Ctx", d: dict, quiet: bool) -> None:
                 and ctx.me_id in mentions and author.get("accountId") != ctx.me_id):
             snippet = " ".join(text.split())[:180]
             ctx.alert(d, "mentioned", f"{author.get('displayName')}: {snippet}", external=True)
+        elif (not exists and not quiet and not new_ticket and d["key"] in ctx.watched and not ctx.is_me(d)
+              and author.get("accountId") != ctx.me_id):
+            snippet = " ".join(text.split())[:180]
+            ctx.alert(d, "watched", f"comment from {author.get('displayName')}: {snippet}", external=True)
 
 
 def _store_sprints(conn, d: dict) -> None:
@@ -311,7 +332,7 @@ def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
     d["urgency"] = urgency_score(d, s)
     _upsert(conn, d, first_seen=now_iso(), scope=scope)
     _store_sprints(conn, d)
-    _store_comments(ctx, d, quiet)
+    _store_comments(ctx, d, quiet, new_ticket=old is None)
     conn.commit()  # release the write lock after each ticket
 
     if quiet:
@@ -328,6 +349,7 @@ def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
     if old.get("in_bugs") and a.priority_raised and \
             s.priority_rank(d["priority"]) > s.priority_rank(old["priority"]):
         ctx.alert(d, "priority_raised", f"{old['priority']} → {d['priority']}")
+        fired = True
     if old.get("in_bugs") and a.reopened and old["status_category"] == "done" and open_now:
         ctx.alert(d, "reopened", f"now {d['status']}")
         fired = True
@@ -335,8 +357,14 @@ def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
         if not entered_bugs:  # _new_bug_alerts already covered it
             ctx.alert(d, "assigned_to_me", f"previously {old['assignee'] or 'unassigned'}", external=True)
         fired = True
-    if not fired and a.my_status_changes and ctx.is_me(d) and old["status"] != d["status"]:
-        ctx.alert(d, "my_status", f"{old['status']} → {d['status']}", external=True)
+    if ctx.is_me(d):
+        if not fired and a.my_status_changes and old["status"] != d["status"]:
+            ctx.alert(d, "my_status", f"{old['status']} → {d['status']}", external=True)
+    elif not fired and d["key"] in ctx.watched:
+        changes = [f"{label}: {old[f] or '—'} → {d[f] or '—'}" for f, label in
+                   (("status", "status"), ("assignee", "assignee"), ("priority", "priority")) if old[f] != d[f]]
+        if changes:
+            ctx.alert(d, "watched", "; ".join(changes), external=True)
 
 
 def _new_bug_alerts(ctx: _Ctx, d: dict) -> None:
@@ -436,6 +464,24 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
         set_state(conn, "team_last_sync", started.isoformat())
     else:
         conn.execute("UPDATE issues SET in_team=0")
+    # ---- your watch list: tickets you follow without owning them
+    watched = sorted(ctx.watched)
+    for i in range(0, len(watched), 50):
+        chunk = watched[i:i + 50]
+        try:
+            raws = list(client.search(f"key in ({','.join(chunk)})", extra_fields=ctx.extra))
+        except Exception:           # one deleted or hidden ticket fails the whole JQL: go one by one
+            raws = []
+            for k in chunk:
+                try:
+                    raws += list(client.search(f"key = {k}", extra_fields=ctx.extra))
+                    set_state(conn, f"watch_error:{k}", "")
+                except Exception as e:
+                    set_state(conn, f"watch_error:{k}", str(e)[:200])
+                    log.warning("Watched ticket %s: %s", k, e)
+        for raw in raws:
+            _process(ctx, raw, "watch", quiet=False)
+    conn.execute(f"UPDATE issues SET in_watch=0 WHERE key NOT IN ({','.join('?' * len(watched))})", watched)
     _refresh_versions(conn, client, settings, project_keys(base, team_jql))
     try:
         from .timelog import sync_worklogs
@@ -457,7 +503,7 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
             if (parse_ts(r["created"]) or started) < cutoff:
                 conn.execute("UPDATE issues SET in_bugs=0 WHERE key=?", (r["key"],))
     orphans = [r["key"] for r in conn.execute(
-        "SELECT key FROM issues WHERE in_bugs=0 AND in_mine=0 AND in_team=0")]
+        "SELECT key FROM issues WHERE in_bugs=0 AND in_mine=0 AND in_team=0 AND in_watch=0")]
     stats["removed"] += _forget(conn, orphans)
 
     # Age changes urgency even when Jira doesn't, so re-score every open ticket.
@@ -497,11 +543,14 @@ def _sync_github(conn, settings, alerter, GitHubClient, resolve_token):
         from .github_sync import sync_github
         client = GitHubClient(resolve_token(settings.github.token))
         out = sync_github(conn, settings, client, alerter)
-        try:
-            out["deployments"] = sync_deployments(conn, settings, client, alerter)
-        except Exception as e:
-            log.warning("Deployment sync failed: %s", e)
-            out["deployments"] = {"error": str(e)}
+        from .codehealth import sync_ci, sync_security
+        for name, fn in (("deployments", sync_deployments), ("ci", sync_ci), ("security", sync_security)):
+            try:
+                out[name] = fn(conn, settings, client, alerter)
+            except Exception as e:      # one part failing never stops the others
+                conn.rollback()
+                log.warning("%s sync failed: %s", name.title(), e)
+                out[name] = {"error": str(e)}
         return out
     except Exception as e:
         conn.rollback()

@@ -123,6 +123,8 @@ def _details(n: dict, author: str) -> dict:
                           + sum(1 for c in convo if c["kind"] == "review" and c["body"]),
         "checks": checks,
         "labels": [l["name"] for l in ((n.get("labels") or {}).get("nodes") or [])],
+        "files": [{"path": f.get("path"), "additions": f.get("additions"), "deletions": f.get("deletions")}
+                  for f in ((n.get("files") or {}).get("nodes") or []) if f and f.get("path")],
     }
 
 
@@ -229,7 +231,9 @@ def sync_github(conn, settings: Settings, client: GitHubClient, alerter: Alerter
         login = (m.get("github") or "").strip()
         if login and login.lower() != me.lower():
             queries += [(f"is:pr is:open author:{login} {scope}", "team"),
-                        (f"is:pr is:open review-requested:{login} {scope}", "team")]
+                        (f"is:pr is:open review-requested:{login} {scope}", "team"),
+                        # merged work, for hotspots, reviewer suggestions, and regression suspects
+                        (f"is:pr is:merged author:{login} merged:>={since} {scope}", "team")]
     for q, extra in queries:
         for n in client.search_prs(q.strip()):
             pr = _map_pr(n, me, prefixes)

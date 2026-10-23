@@ -120,6 +120,22 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS outbox (     -- Teams/Slack/email messages held for quiet hours
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, target TEXT, title TEXT, body TEXT, url TEXT
 );
+CREATE TABLE IF NOT EXISTS watches (       -- tickets you follow without owning them
+    key TEXT PRIMARY KEY, added TEXT, note TEXT
+);
+CREATE TABLE IF NOT EXISTS snoozes (       -- tickets muted for you until a time
+    key TEXT PRIMARY KEY, until TEXT, reason TEXT
+);
+CREATE TABLE IF NOT EXISTS ci_runs (
+    id INTEGER PRIMARY KEY, repo TEXT, branch TEXT, workflow TEXT, sha TEXT, status TEXT, conclusion TEXT,
+    created TEXT, updated TEXT, attempt INTEGER, actor TEXT, commit_author TEXT, message TEXT, url TEXT,
+    duration_s REAL
+);
+CREATE INDEX IF NOT EXISTS ix_ci_repo ON ci_runs(repo, workflow, created);
+CREATE TABLE IF NOT EXISTS security_alerts (
+    id TEXT PRIMARY KEY, repo TEXT, kind TEXT, number INTEGER, severity TEXT, state TEXT, package TEXT,
+    summary TEXT, cve TEXT, ghsa TEXT, url TEXT, created TEXT, updated TEXT, jira_keys TEXT
+);
 CREATE TABLE IF NOT EXISTS github_branches (
     repo TEXT, name TEXT, sha TEXT, committed TEXT, message TEXT, checks TEXT,
     pr_number INTEGER, pr_state TEXT, pr_url TEXT, jira_keys TEXT, url TEXT,
@@ -149,7 +165,9 @@ MIGRATIONS = {
                ("in_bugs", "INTEGER DEFAULT 1"),   # matches the bug JQL
                ("in_mine", "INTEGER DEFAULT 0"),   # matches the my-tickets JQL
                ("in_team", "INTEGER DEFAULT 0"),   # matches the team JQL
-               ("story_points", "REAL"), ("sprint_ids", "TEXT"), ("fix_versions", "TEXT")],
+               ("story_points", "REAL"), ("sprint_ids", "TEXT"), ("fix_versions", "TEXT"),
+               ("in_watch", "INTEGER DEFAULT 0"),  # on your watch list
+               ("description", "TEXT"), ("environment", "TEXT"), ("affects_versions", "TEXT")],
     "github_prs": [("merge_state", "TEXT"), ("labels", "TEXT"), ("approvals", "INTEGER"),
                    ("pending_reviewers", "TEXT"), ("comments_count", "INTEGER"),
                    ("unresolved_threads", "INTEGER"), ("details", "TEXT")],
@@ -189,7 +207,7 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     d = dict(row)
     for k in ("components", "labels", "channels", "relations", "jira_keys", "pending_reviewers",
               "details", "sprint_ids", "fix_versions", "mentions", "statuses", "tickets",
-              "prs", "authors", "progress"):
+              "prs", "authors", "progress", "affects_versions"):
         if k in d and isinstance(d[k], str):
             try:
                 d[k] = json.loads(d[k])

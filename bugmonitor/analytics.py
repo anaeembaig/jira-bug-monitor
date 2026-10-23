@@ -202,6 +202,17 @@ def estimate_fix(conn, key: str, min_samples: int = 5) -> dict:
            f"(up to {_fmt_hours(remaining_p80)}).")
         + f" Confidence: {confidence}."
     )
+    try:
+        from .quality import similar_estimate
+        sim = similar_estimate(conn, key)
+    except Exception:
+        sim = None
+    if sim:
+        result["similar"] = sim
+        lo, hi = sim["range_hours"]
+        spread = f" ({_fmt_hours(lo)} to {_fmt_hours(hi)})" if hi - lo >= 0.5 else ""
+        result["summary"] += (f" The {len(sim['tickets'])} most similar finished tickets took about "
+                              f"{_fmt_hours(sim['median_hours'])}{spread}.")
     if result["jira_original_estimate_h"]:
         result["summary"] += f" Jira original estimate: {result['jira_original_estimate_h']} h."
     return result

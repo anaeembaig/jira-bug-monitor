@@ -53,6 +53,9 @@ class JiraSettings:
     # Tickets assigned to you, any type, for the My Tickets view. Blank disables it.
     my_jql: str = "assignee = currentUser() AND updated >= -60d"
     fetch_comments: bool = True    # needed for @mention alerts and comments in ticket details
+    fetch_description: bool = True # needed for the bug quality check, search, and similar tickets
+    # Let the dashboard and Claude change tickets for you: move status, assign to you, comment.
+    allow_actions: bool = False
 
 
 @dataclass
@@ -109,6 +112,10 @@ class TeamSettings:
     boards: list[int] = field(default_factory=list)  # Jira boards for sprints (blank = find by project)
     story_points_field: str = ""    # blank = detect
     escape_labels: list[str] = field(default_factory=lambda: ["production", "prod", "customer", "escalation"])
+    # Capacity: [[team.time_off]] name = "Sam Lee", start = "2026-11-02", end = "2026-11-06"
+    time_off: list[dict] = field(default_factory=list)
+    focus_hours_per_day: float = 6  # hours a person can spend on tickets on a normal day
+    hours_per_point: float = 0      # 0 = learn from finished tickets
 
 
 @dataclass
@@ -121,6 +128,8 @@ class NotifySettings:
     digest_team: bool = True        # team summary to routes with digest = true
     weekly_report_day: str = ""     # e.g. "Friday"; posts the weekly report to digest routes
     sync_health: bool = True        # tell you when syncing keeps failing
+    standup_time: str = ""          # e.g. "09:15": your standup note (yesterday, today, blockers) on workdays
+    standup_team: bool = False      # also post the team standup to routes with digest = true
 
 
 @dataclass
@@ -172,6 +181,42 @@ class DeploySettings:
 
 
 @dataclass
+class SLASettings:
+    """Response and fix targets for bugs, in hours, by priority."""
+    enabled: bool = False
+    response_hours: dict = field(default_factory=lambda: {
+        "Blocker": 2, "Highest": 2, "Critical": 4, "High": 8, "Major": 8, "Medium": 24, "Normal": 24,
+        "Low": 72, "Minor": 72, "Lowest": 120, "Trivial": 120})
+    resolve_hours: dict = field(default_factory=lambda: {
+        "Blocker": 24, "Highest": 24, "Critical": 48, "High": 120, "Major": 120, "Medium": 240,
+        "Normal": 240, "Low": 480, "Minor": 480, "Lowest": 720, "Trivial": 720})
+    warn_at: float = 0.8            # warn when this share of the time is used
+    projects: list[str] = field(default_factory=list)   # blank = every project you watch
+    route: str = ""                 # team channel for breaches ("" = only you, for your tickets)
+
+
+@dataclass
+class QualitySettings:
+    enabled: bool = True
+    min_description_words: int = 15
+    require_steps: bool = True       # steps to reproduce
+    require_expected: bool = True    # expected vs. actual result
+    require_environment: bool = True # browser, app version, or environment
+    require_version: bool = False    # "Affects versions" filled in
+
+
+@dataclass
+class CodeHealthSettings:
+    ci: bool = True                  # GitHub Actions on default branches
+    ci_branches: list[str] = field(default_factory=lambda: ["main", "master", "develop"])
+    ci_days: int = 14
+    alert_ci_failures: bool = True   # a default branch goes red
+    security: bool = True            # Dependabot and code scanning alerts
+    security_min_severity: str = "high"   # low | medium | high | critical
+    alert_security: bool = True
+
+
+@dataclass
 class DashboardSettings:
     host: str = "127.0.0.1"
     port: int = 8765
@@ -207,6 +252,9 @@ class Settings:
     timelog: TimelogSettings = field(default_factory=TimelogSettings)
     deploy: DeploySettings = field(default_factory=DeploySettings)
     storage: StorageSettings = field(default_factory=StorageSettings)
+    sla: SLASettings = field(default_factory=SLASettings)
+    quality: QualitySettings = field(default_factory=QualitySettings)
+    code: CodeHealthSettings = field(default_factory=CodeHealthSettings)
     config_file: Path | None = None
     secret_sources: dict = field(default_factory=dict)  # name -> env | keychain | config | ""
 
@@ -313,4 +361,8 @@ def load_settings(path: str | os.PathLike | None = None, *, secrets: bool = True
     high = pr.get("high", list(DEFAULT_HIGH))
     stor = _apply(StorageSettings(), {k: v for k, v in storage.items() if k != "db_path"})
     return Settings(jira, alerts, dash, gh, db, priority_order, high, team, notify, routes,
-                    escalations, timelog, deploy, stor, cfg_path, sources)
+                    escalations, timelog, deploy, stor,
+                    _apply(SLASettings(), raw.get("sla", {})),
+                    _apply(QualitySettings(), raw.get("quality", {})),
+                    _apply(CodeHealthSettings(), raw.get("code_health", {})),
+                    cfg_path, sources)

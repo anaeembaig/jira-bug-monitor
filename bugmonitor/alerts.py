@@ -38,6 +38,11 @@ TITLES = {
     "pr_merged": "PR merged",
     "pr_comment": "New comment on your PR",
     "merge_conflicts": "Merge conflicts",
+    "watched": "Watched ticket changed",
+    "sla_warning": "SLA due soon",
+    "sla_breach": "SLA breached",
+    "ci_failed": "Build broken",
+    "security": "Security alert",
 }
 
 
@@ -139,13 +144,20 @@ CARD_COLOR = {
     "pr_approved": "Good", "pr_merged": "Good", "pr_comment": "Default",
     "mentioned": "Accent", "stuck": "Warning", "escalation": "Attention", "sync_failing": "Attention",
     "deployed": "Good", "deploy_failed": "Attention", "rollback": "Warning",
+    "watched": "Default", "sla_warning": "Warning", "sla_breach": "Attention", "ci_failed": "Attention",
+    "security": "Attention",
 }
 
 
 # Events that go to team channels ([[routes]]); everything else is personal.
 TEAM_EVENTS = {"new_bug", "priority_raised", "reopened", "escalation", "stuck",
-               "deployed", "deploy_failed", "rollback"}
+               "deployed", "deploy_failed", "rollback", "sla_breach", "ci_failed", "security"}
 DEPLOY_KINDS = {"deployed", "deploy_failed", "rollback"}  # all match a route's "deployment" event
+# The event name a route lists in `events` for each alert kind (default: the kind itself).
+ROUTE_EVENT = {**{k: "deployment" for k in DEPLOY_KINDS}, "sla_breach": "sla", "ci_failed": "ci"}
+# Kinds a route sends regardless of its min_priority.
+ANY_PRIORITY = {"escalation", "stuck", "sla_breach", "ci_failed", "security"} | DEPLOY_KINDS
+REPO_KINDS = {"ci_failed", "security"}      # about a repo, not a Jira project: every route with the event gets them
 
 
 def _hhmm(text: str):
@@ -179,8 +191,14 @@ class Alerter:
         return self.s.at_least(priority, self.a.external_min_priority)
 
     def _urgent(self, kind: str, issue: dict) -> bool:
-        return kind in ("escalation", "sync_failing", "deploy_failed", "rollback") or (
+        return kind in ("escalation", "sync_failing", "deploy_failed", "rollback", "sla_breach") or (
             kind in ("new_bug", "reopened", "priority_raised") and self.s.is_high(issue.get("priority")))
+
+    def _snoozed(self, key: str | None) -> bool:
+        if not key:
+            return False
+        r = self.conn.execute("SELECT until FROM snoozes WHERE key=?", (key,)).fetchone()
+        return bool(r) and (r["until"] or "") > now_iso()
 
     def _routes_for(self, issue: dict, kind: str, route: str | None) -> list:
         if route is not None:
@@ -191,12 +209,12 @@ class Alerter:
         projects = set(issue.get("projects") or [issue.get("project") or (issue.get("key") or "").split("-")[0]])
         out = []
         for r in self.s.routes:
-            event = "deployment" if kind in DEPLOY_KINDS else kind
+            event = ROUTE_EVENT.get(kind, kind)
             if not r.webhook or event not in r.events:
                 continue
-            if r.projects and not projects & {p.upper() for p in r.projects}:
+            if r.projects and kind not in REPO_KINDS and not projects & {p.upper() for p in r.projects}:
                 continue
-            if kind not in {"escalation", "stuck"} | DEPLOY_KINDS and not self.s.at_least(
+            if kind not in ANY_PRIORITY and not self.s.at_least(
                     issue.get("priority"), r.min_priority or self.a.external_min_priority):
                 continue
             out.append(r)
@@ -220,6 +238,9 @@ class Alerter:
         channels = ["dashboard"]
         urgent = self._urgent(kind, issue)
 
+        if personal and self._snoozed(issue.get("key")):
+            personal = False                    # muted for you; team channels still hear about it
+            channels.append("snoozed")
         if personal:
             if self.a.desktop and desktop_notify(title, body):
                 channels.append("desktop")
