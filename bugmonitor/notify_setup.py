@@ -12,7 +12,7 @@ import shutil
 import tomllib
 from pathlib import Path
 
-from .config import ROOT, Settings, load_settings
+from .config import Settings, config_path as resolve_config, load_settings
 
 EVENTS = [
     # (config key, section, label, who it reaches beyond the dashboard)
@@ -141,15 +141,15 @@ def preview(settings: Settings) -> str:
 
 
 def main(argv: list[str], config_path: str | None = None) -> int:
-    path = Path(config_path) if config_path else ROOT / "config.toml"
-    settings = load_settings(config_path)
+    path = resolve_config(config_path)
+    settings = load_settings(path)
     if "--activate" in argv:
         updates, keep = recommended(settings)
         changes = set_config_values(path, updates, keep)
         print("\n".join(changes) if changes else "Already active. Nothing to change.")
         if changes:
             print(f"\nSaved {path.name} (previous version: {path.name}.bak). Restart ./start.sh to apply.")
-        settings = load_settings(config_path)
+        settings = load_settings(path)
     print("\n".join(status(settings)))
     if "--preview" in argv:
         print("\n" + preview(settings))

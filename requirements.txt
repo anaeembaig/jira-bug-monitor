@@ -1,3 +1,4 @@
 requests>=2.31
 mcp>=1.12,<2
+keyring>=24
 plyer>=2.1; platform_system == "Windows"

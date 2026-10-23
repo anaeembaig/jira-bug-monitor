@@ -1,4 +1,6 @@
-"""Command line: python -m bugmonitor <command>
+"""Command line: bugmonitor <command>   (or: python -m bugmonitor <command>)
+
+  init       Guided setup: logins, projects, Teams, GitHub, team views (run again to change)
 
   run        Poll Jira on a schedule and serve the dashboard (leave this running)
   sync       Run one sync now and exit
@@ -9,6 +11,7 @@
   install-claude  Connect the monitor to Claude Desktop and Claude Code
   doctor     Show version, running copies, and what holds the database
   notifications  Show your notifications; add --activate to turn them on, --preview to test Teams
+  secrets    Show where each token is stored; add --move to move them into the credential store
 """
 from __future__ import annotations
 
@@ -31,18 +34,27 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="bugmonitor", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["run", "sync", "check", "dashboard", "test-alert", "mcp", "install-claude", "doctor",
-                                        "notifications"])
+                                        "notifications", "init", "secrets"])
     p.add_argument("--config", help="Path to config.toml")
     p.add_argument("--no-browser", action="store_true", help="Don't open the dashboard on start")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--activate", action="store_true", help="notifications: turn on the recommended set")
     p.add_argument("--preview", action="store_true", help="notifications: send a sample to Teams")
+    p.add_argument("--move", action="store_true", help="secrets: move tokens into the credential store")
     a = p.parse_args(argv)
 
     if a.command == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()
         return 0
+
+    if a.command == "init":
+        from .init_wizard import run as init
+        return init(path=a.config)
+
+    if a.command == "secrets":
+        from .init_wizard import move_secrets, secrets_status
+        return move_secrets(a.config) if a.move else secrets_status(a.config)
 
     if a.command == "notifications":
         from .notify_setup import main as notifications
@@ -61,6 +73,9 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     s = load_settings(a.config)
+    if not s.config_file or not s.config_file.exists():
+        print(f"No settings found at {s.config_file}. Run `bugmonitor init` first.")
+        return 1
 
     if a.command == "check":
         me = _client(s).myself()

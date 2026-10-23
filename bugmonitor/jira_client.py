@@ -9,7 +9,7 @@ import requests
 FIELDS = [
     "summary", "status", "priority", "assignee", "reporter", "created", "updated",
     "resolutiondate", "components", "labels", "timeoriginalestimate", "timespent",
-    "project", "issuetype",
+    "project", "issuetype", "fixVersions",
 ]
 
 
@@ -48,11 +48,12 @@ class JiraClient:
     def myself(self) -> dict:
         return self._request("GET", "/rest/api/3/myself")
 
-    def search(self, jql: str, page_size: int = 100) -> Iterator[dict]:
+    def search(self, jql: str, page_size: int = 100, extra_fields: list[str] | None = None) -> Iterator[dict]:
         """Yield every issue matching JQL using the enhanced search endpoint."""
         token = None
+        fields = FIELDS + list(extra_fields or [])
         while True:
-            body = {"jql": jql, "fields": FIELDS, "maxResults": page_size}
+            body = {"jql": jql, "fields": fields, "maxResults": page_size}
             if token:
                 body["nextPageToken"] = token
             data = self._request("POST", "/rest/api/3/search/jql", json=body)
@@ -72,6 +73,50 @@ class JiraClient:
             yield from values
             start += len(values)
             if data.get("isLast", True) or not values:
+                return
+
+    def projects(self) -> list[dict]:
+        out, start = [], 0
+        while True:
+            data = self._request("GET", "/rest/api/3/project/search",
+                                 params={"startAt": start, "maxResults": 100, "orderBy": "key"})
+            vals = data.get("values", [])
+            out += [{"key": p["key"], "name": p.get("name", "")} for p in vals]
+            start += len(vals)
+            if data.get("isLast", True) or not vals:
+                return out
+
+    def fields(self) -> list[dict]:
+        return self._request("GET", "/rest/api/3/field")
+
+    def comments(self, key: str, max_results: int = 50) -> list[dict]:
+        data = self._request("GET", f"/rest/api/3/issue/{key}/comment",
+                             params={"maxResults": max_results, "orderBy": "-created"})
+        return data.get("comments", [])
+
+    def versions(self, project: str) -> list[dict]:
+        return self._request("GET", f"/rest/api/3/project/{project}/versions")
+
+    # ---- Jira Software (boards and sprints)
+    def boards(self, project: str) -> list[dict]:
+        data = self._request("GET", "/rest/agile/1.0/board", params={"projectKeyOrId": project, "maxResults": 50})
+        return data.get("values", [])
+
+    def sprints(self, board_id: int, state: str = "active,future") -> list[dict]:
+        data = self._request("GET", f"/rest/agile/1.0/board/{board_id}/sprint",
+                             params={"state": state, "maxResults": 50})
+        return data.get("values", [])
+
+    def sprint_issues(self, sprint_id: int, extra_fields: list[str] | None = None) -> Iterator[dict]:
+        start = 0
+        while True:
+            data = self._request("GET", f"/rest/agile/1.0/sprint/{sprint_id}/issue",
+                                 params={"startAt": start, "maxResults": 100,
+                                         "fields": ",".join(FIELDS + list(extra_fields or []))})
+            issues = data.get("issues", [])
+            yield from issues
+            start += len(issues)
+            if not issues or start >= data.get("total", 0):
                 return
 
     def browse_url(self, key: str) -> str:

@@ -1,0 +1,124 @@
+# Bug Monitor settings.
+# The easy way to fill this in is `bugmonitor init`. It asks a few questions, tests your
+# logins, and stores tokens in your Mac Keychain (or Windows Credential Locker) instead of here.
+# Secrets left blank below are read from the credential store or environment variables.
+
+[jira]
+base_url = "https://YOUR-SITE.atlassian.net"
+email = "you@example.com"
+api_token = ""            # blank = credential store or JIRA_API_TOKEN
+
+# Bugs to watch for the Overview and Bugs tabs.
+jql = 'issuetype = Bug AND project in (PROJ) AND created >= -60d'
+retention_days = 60       # drop bugs from the dashboard once they're older than this
+
+# My Tickets: everything assigned to you (any type), shown by status with time in each status.
+my_jql = 'assignee = currentUser() AND project in (PROJ) AND updated >= -60d'
+
+poll_minutes = 5          # how often to check Jira
+backfill_days = 90        # the first sync also loads recently resolved bugs, for estimates
+fetch_changelog = true    # full status history; needed for time in status and estimates
+fetch_comments = true     # needed for @mention alerts and comments in ticket details
+
+[alerts]
+new_bug = true
+priority_raised = true
+reopened = true
+assigned_to_me = true     # always sent to Teams
+my_status_changes = true  # always sent to Teams, e.g. In Progress -> In QA
+mentions = true           # someone @mentions you in a Jira comment (always sent)
+stuck_reminders = true    # your ticket or PR has been stuck too long (once a day)
+alert_on_first_sync = false
+external_min_priority = "Normal"   # new-bug alerts below this stay on the dashboard
+desktop = true
+
+# Your private Teams chat (Workflows > "Post to a chat when a webhook request is received"
+# > Chat with Flow bot > you as recipient). Blank = credential store.
+teams_webhook = ""
+slack_webhook = ""
+
+email_enabled = false
+smtp_host = "smtp.office365.com"
+smtp_port = 587
+smtp_starttls = true
+smtp_user = ""
+smtp_password = ""
+email_from = ""
+email_to = []
+
+[notify]
+quiet_hours = ""          # e.g. "20:00-08:00": non-urgent Teams messages wait, then arrive as one summary
+quiet_weekends = false
+urgent_bypasses_quiet = true
+digest_time = ""          # e.g. "09:30": daily summary for you, and for the team routes with digest = true
+digest_personal = true
+digest_team = true
+weekly_report_day = ""    # e.g. "Friday": posts the weekly report to digest routes
+sync_health = true        # tells you when syncing keeps failing
+
+# GitHub: your PRs and branches with reviews, comments, and checks, linked to Jira by ticket key.
+# Classic token with the "repo" scope. If your org uses single sign-on, authorize the token for it.
+[github]
+enabled = false
+token = ""                # blank = credential store, then the GitHub CLI login
+username = ""             # blank = detected from the token
+orgs = []                 # e.g. ["your-org"]
+repos = []                # extra repos for branches and deployments, e.g. ["your-org/web-app"]
+jira_prefixes = []        # blank = the Jira projects you watch
+days = 60
+alerts_to_external = true
+production_environments = ["production", "prod"]
+
+# Team views (team board, sprint, releases, review queue, QA, stuck work, insights).
+# Leave jql blank to turn them off.
+[team]
+name = ""
+jql = ''                  # e.g. 'project in (PROJ) AND (statusCategory != Done OR updated >= -30d)'
+qa_statuses = ["Ready for QA", "In QA", "QA", "Testing"]
+review_statuses = ["Code Review", "In Review", "Review"]
+pr_review_hours = 24
+boards = []               # Jira board IDs for sprints; blank = found from your projects
+story_points_field = ""   # blank = detected
+escape_labels = ["production", "prod", "customer", "escalation"]
+
+[team.stuck_days]
+"*" = 5                   # any other in-progress status
+"Code Review" = 2
+"In QA" = 3
+
+# One block per teammate. email is used for @mentions in Teams channels.
+# [[team.members]]
+# name = "Jira display name"
+# github = "github-login"
+# email = "name@example.com"
+
+# Team Teams channels. In the channel: Workflows > "Post to a channel when a webhook
+# request is received", then paste the URL. Use "keychain:NAME" to keep it in the credential store.
+# [[routes]]
+# name = "front-end"
+# webhook = "https://..."
+# projects = ["PROJ"]
+# events = ["new_bug", "priority_raised", "reopened", "escalation", "stuck"]
+# min_priority = "Major"
+# digest = true
+# mention_assignee = true
+
+# Escalations, e.g. a Critical bug still unassigned after 2 hours.
+# [[escalations]]
+# name = "Critical unassigned"
+# min_priority = "Critical"
+# unassigned_hours = 2
+# open_hours = 0
+# route = "front-end"     # blank = your private chat
+
+[dashboard]
+host = "127.0.0.1"        # local only
+port = 8765
+
+[storage]
+db_path = "data/monitor.db"   # relative to this file
+
+[priority]
+# Most urgent first. Covers both Jira schemes; names not listed fall back to this built-in order.
+order = ["Blocker", "Highest", "Critical", "High", "Major", "Medium", "Normal", "Low", "Minor", "Lowest", "Trivial"]
+high = ["Blocker", "Highest", "Critical", "High", "Major"]

@@ -33,25 +33,50 @@ A local app that watches Jira bugs and your GitHub pull requests, alerts you whe
   Claude Code CLI    Claude Desktop
 ```
 
-## Setup
+## Install
 
-You need Python 3.11 or newer.
+You need Python 3.11 or newer and [pipx](https://pipx.pypa.io) (`brew install pipx` on a Mac).
 
-1. Unzip this folder into Documents. The result should be `Documents/jira-bug-monitor`.
-2. Run setup:
-   - **Windows:** double-click `setup.bat`
-   - **Mac:** open Terminal in the folder and run `./setup.sh`
+```
+pipx install git+https://github.com/anaeembaig/jira-bug-monitor.git
+bugmonitor init
+bugmonitor run
+```
 
-   This creates a virtual environment, installs dependencies, creates `config.toml`, and connects the monitor to Claude Desktop and Claude Code.
-3. Create a Jira API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
-4. Open `config.toml` and set `base_url`, `email`, and `api_token`. The token can also go in the `JIRA_API_TOKEN` environment variable.
-5. Test the connection:
-   - **Windows:** `.venv\Scripts\python -m bugmonitor check`
-   - **Mac:** `.venv/bin/python -m bugmonitor check`
-6. Start the monitor with `start.bat` or `./start.sh`. The dashboard opens at <http://127.0.0.1:8765>.
-7. Restart Claude Desktop. In Claude Code, run `/mcp` and confirm `jira-bug-monitor` is listed.
+`bugmonitor init` walks you through everything:
 
-The first sync loads every open bug, plus bugs resolved in the last 90 days, so estimates have history. It doesn't alert on existing bugs. Alerts start with the next poll.
+- **Jira:** your site, email, and API token, tested before it's saved
+- **Projects:** pick from the projects your account can see, plus how many days of history to keep
+- **Teams:** your private chat webhook and the lowest priority that should reach you
+- **GitHub:** a token and your organizations, also tested
+- **Team views:** optional team board, sprint, review queue, and insights
+- **Claude:** connects the monitor to Claude Desktop and Claude Code
+
+Tokens go into your Mac Keychain (or Windows Credential Locker), not the settings file. Run `bugmonitor init` again any time to change an answer; your current values are the defaults.
+
+The dashboard opens at <http://127.0.0.1:8765>. To update later, run `pipx upgrade jira-bug-monitor`.
+
+### Where Settings Live
+
+| Install | Settings file |
+|---|---|
+| pipx on a Mac | `~/Library/Application Support/bugmonitor/config.toml` |
+| pipx on Windows | `%APPDATA%\bugmonitor\config.toml` |
+| pipx on Linux | `~/.config/bugmonitor/config.toml` |
+| Git checkout | `config.toml` in the project folder |
+
+Set `BUGMON_CONFIG` to use a different file. `bugmonitor secrets` shows where each token comes from, and `bugmonitor secrets --move` moves tokens out of the settings file into your credential store.
+
+### Working on the Code
+
+```
+git clone https://github.com/anaeembaig/jira-bug-monitor.git
+cd jira-bug-monitor
+./setup.sh                       # or setup.bat on Windows
+.venv/bin/python -m pytest -q
+```
+
+Tests run automatically on GitHub for every push, on macOS, Windows, and Linux.
 
 ## Alert Channels
 
