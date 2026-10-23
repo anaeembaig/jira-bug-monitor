@@ -87,6 +87,30 @@ CREATE TABLE IF NOT EXISTS github_prs (
     status TEXT,               -- human label, e.g. "Checks failing"
     last_synced TEXT
 );
+CREATE TABLE IF NOT EXISTS sprints (
+    id INTEGER PRIMARY KEY, board_id INTEGER, name TEXT, state TEXT,
+    start TEXT, end TEXT, complete TEXT, goal TEXT
+);
+CREATE TABLE IF NOT EXISTS versions (
+    id TEXT PRIMARY KEY, project TEXT, name TEXT, released INTEGER, archived INTEGER,
+    release_date TEXT, description TEXT
+);
+CREATE TABLE IF NOT EXISTS jira_comments (
+    id TEXT PRIMARY KEY, key TEXT, author TEXT, author_id TEXT, created TEXT,
+    body TEXT, mentions TEXT        -- JSON list of mentioned account IDs
+);
+CREATE INDEX IF NOT EXISTS ix_comments_key ON jira_comments(key, created);
+CREATE TABLE IF NOT EXISTS deployments (
+    id TEXT PRIMARY KEY, repo TEXT, environment TEXT, sha TEXT, state TEXT,
+    created TEXT, updated TEXT, url TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_deploy_sha ON deployments(sha);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, actor TEXT, action TEXT, detail TEXT
+);
+CREATE TABLE IF NOT EXISTS outbox (     -- Teams/Slack/email messages held for quiet hours
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, target TEXT, title TEXT, body TEXT, url TEXT
+);
 CREATE TABLE IF NOT EXISTS github_branches (
     repo TEXT, name TEXT, sha TEXT, committed TEXT, message TEXT, checks TEXT,
     pr_number INTEGER, pr_state TEXT, pr_url TEXT, jira_keys TEXT, url TEXT,
@@ -114,7 +138,9 @@ def connect(path: Path) -> sqlite3.Connection:
 MIGRATIONS = {
     "issues": [("issuetype", "TEXT"), ("assignee_id", "TEXT"),
                ("in_bugs", "INTEGER DEFAULT 1"),   # matches the bug JQL
-               ("in_mine", "INTEGER DEFAULT 0")],  # matches the my-tickets JQL
+               ("in_mine", "INTEGER DEFAULT 0"),   # matches the my-tickets JQL
+               ("in_team", "INTEGER DEFAULT 0"),   # matches the team JQL
+               ("story_points", "REAL"), ("sprint_ids", "TEXT"), ("fix_versions", "TEXT")],
     "github_prs": [("merge_state", "TEXT"), ("labels", "TEXT"), ("approvals", "INTEGER"),
                    ("pending_reviewers", "TEXT"), ("comments_count", "INTEGER"),
                    ("unresolved_threads", "INTEGER"), ("details", "TEXT")],
@@ -147,7 +173,7 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
         return None
     d = dict(row)
     for k in ("components", "labels", "channels", "relations", "jira_keys", "pending_reviewers",
-              "details"):
+              "details", "sprint_ids", "fix_versions", "mentions"):
         if k in d and isinstance(d[k], str):
             try:
                 d[k] = json.loads(d[k])

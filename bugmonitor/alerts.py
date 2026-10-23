@@ -22,6 +22,10 @@ TITLES = {
     "reopened": "Bug reopened",
     "assigned_to_me": "Assigned to you",
     "my_status": "Your ticket moved",
+    "mentioned": "You were mentioned",
+    "stuck": "Stuck",
+    "escalation": "Escalation",
+    "sync_failing": "Bug Monitor can't sync",
     "review_requested": "Review requested",
     "checks_failed": "Checks failing",
     "pr_approved": "PR approved",
@@ -104,6 +108,7 @@ CARD_COLOR = {
     "assigned_to_me": "Accent", "my_status": "Accent", "review_requested": "Accent",
     "checks_failed": "Attention", "merge_conflicts": "Attention", "changes_requested": "Warning",
     "pr_approved": "Good", "pr_merged": "Good", "pr_comment": "Default",
+    "mentioned": "Accent", "stuck": "Warning", "escalation": "Attention", "sync_failing": "Attention",
 }
 
 

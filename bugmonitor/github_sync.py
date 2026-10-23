@@ -221,14 +221,25 @@ def sync_github(conn, settings: Settings, client: GitHubClient, alerter: Alerter
 
     # ---- pull requests
     found: dict[str, dict] = {}
-    for q in (f"is:pr involves:{me} updated:>={since} {scope}",
-              f"is:pr review-requested:{me} is:open {scope}",
-              f"is:pr reviewed-by:{me} updated:>={since} {scope}"):
+    queries = [(f"is:pr involves:{me} updated:>={since} {scope}", None),
+               (f"is:pr review-requested:{me} is:open {scope}", None),
+               (f"is:pr reviewed-by:{me} updated:>={since} {scope}", None)]
+    # Team review queue: open PRs by teammates and PRs waiting on their reviews.
+    for m in settings.team.members:
+        login = (m.get("github") or "").strip()
+        if login and login.lower() != me.lower():
+            queries += [(f"is:pr is:open author:{login} {scope}", "team"),
+                        (f"is:pr is:open review-requested:{login} {scope}", "team")]
+    for q, extra in queries:
         for n in client.search_prs(q.strip()):
             pr = _map_pr(n, me, prefixes)
+            rel = set(pr["relations"]) | ({extra} if extra else set())
             prev = found.get(pr["id"])
             if prev:
-                pr["relations"] = sorted(set(prev["relations"]) | set(pr["relations"]))
+                rel |= set(prev["relations"])
+            if len(rel) > 1:
+                rel.discard("involved")
+            pr["relations"] = sorted(rel)
             found[pr["id"]] = pr
 
     stats = {"prs": len(found), "branches": 0, "alerts": 0}

@@ -162,6 +162,23 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .cm-b{white-space:pre-wrap;font-size:13px;margin-top:6px;max-height:180px;overflow:auto;word-break:break-word}
 .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--surface-2);border-radius:4px;padding:1px 5px}
 
+/* ---------- team */
+.tboard{overflow:auto;max-height:calc(100vh - 230px)}
+.tboard table td{vertical-align:top;white-space:normal;min-width:170px}
+.tboard th:first-child,.tboard td:first-child{position:sticky;left:0;background:var(--surface);z-index:1;min-width:180px}
+.mini{display:block;border:1px solid var(--line);border-radius:7px;padding:6px 8px;margin-bottom:6px;font-size:12px;cursor:pointer;background:var(--surface)}
+.mini:hover{border-color:var(--line-strong)}
+.mini.stuck{border-left:3px solid var(--serious)}
+.mini .k{font-weight:600;color:var(--accent-ink)}
+.person{font-weight:600}
+.person .sub{font-weight:400;display:block}
+.prog{height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--good);border-radius:0 4px 4px 0}
+.rcards{display:grid;gap:16px;padding:16px;grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.rcard{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:10px;align-content:start}
+.overdue{color:var(--critical-ink);font-weight:600}
+.pad{padding:16px}
+
 /* ---------- drawer */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .15s;z-index:30}
 .scrim.on{opacity:1;pointer-events:auto}
@@ -189,6 +206,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
     <nav class="tabs" role="tablist">
       <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
       <button class="tab" role="tab" data-view="mine">My Tickets <span class="count num" id="c-mine">0</span></button>
+      <button class="tab" role="tab" data-view="team">Team <span class="count num" id="c-team">0</span></button>
       <button class="tab" role="tab" data-view="bugs">Bugs <span class="count num" id="c-bugs">0</span></button>
       <button class="tab" role="tab" data-view="github">GitHub <span class="count num" id="c-gh">0</span></button>
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
@@ -233,6 +251,18 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
     <div class="card">
       <div class="toolbar"><div class="seg" id="mine-seg" style="flex-wrap:wrap"></div></div>
       <div id="mine-body"></div>
+    </div>
+  </section>
+
+  <!-- ================= TEAM ================= -->
+  <section class="view" id="v-team">
+    <div class="h-row"><h2 id="team-title">Team</h2><span class="sub" id="team-sub"></span></div>
+    <div class="card">
+      <div class="toolbar"><div class="seg" id="team-seg">
+        <button data-v="board">Board</button><button data-v="sprint">Sprint</button><button data-v="releases">Releases</button>
+        <button data-v="reviews">Review queue</button><button data-v="qa">QA handoff</button><button data-v="stuck">Stuck work</button>
+      </div></div>
+      <div id="team-body"><div class="empty" style="padding:32px">Loading…</div></div>
     </div>
   </section>
 
@@ -360,7 +390,8 @@ function hbars(el, data, {total} = {}) {
       <span class="v num">${d.n}</span></div>`).join("");
 }
 
-function niceMax(v) { if (v <= 4) return 4; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return v; }
+function niceMax(v) { if (v <= 4) return 4; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return v; }
+const days = n => `${n} day${n === 1 ? "" : "s"}`;
 
 function weeklyChart(el, data) {
   const W = el.clientWidth || 600, H = 220, L = 30, R = 8, T = 10, B = 26;
@@ -388,6 +419,33 @@ function weeklyChart(el, data) {
     r.addEventListener("mousemove", e => showTip(`<b>Week of ${fmtDate(d.week)}</b><br><i style="background:var(--series-1)"></i>Created ${d.created}<br><i style="background:var(--series-2)"></i>Resolved ${d.resolved}`, e.clientX, e.clientY));
     r.addEventListener("mouseleave", hideTip);
   });
+}
+
+function multiLine(el, data, series, label) {
+  const W = el.clientWidth || 600, H = 220, L = 34, R = 10, T = 10, B = 26;
+  const max = niceMax(Math.max(1, ...data.flatMap(d => series.map(s => d[s.key]))));
+  const iw = W - L - R, ih = H - T - B;
+  const x = i => L + (data.length < 2 ? iw / 2 : i / (data.length - 1) * iw), y = v => T + ih - v / max * ih;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(label)}">`;
+  svg += [0, max / 2, max].map(t => `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><g class="axis"><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${t}</text></g>`).join("");
+  series.forEach(s => {
+    const pts = data.map((d, i) => `${x(i).toFixed(1)},${y(d[s.key]).toFixed(1)}`);
+    svg += `<path d="M${pts.join(" L")}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = data[data.length - 1];
+    if (last) svg += `<circle cx="${x(data.length - 1)}" cy="${y(last[s.key])}" r="4" fill="${s.color}" stroke="var(--surface)" stroke-width="2"/>`;
+  });
+  const step = Math.ceil(data.length / Math.max(1, Math.floor(iw / 64)));
+  data.forEach((d, i) => { if (i % step === 0) svg += `<g class="axis"><text x="${x(i)}" y="${H - 8}" text-anchor="middle">${fmtDate(d.date)}</text></g>`; });
+  svg += `<line class="xh" y1="${T}" y2="${T + ih}" stroke="var(--line-strong)" visibility="hidden"/><rect class="hit" x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent"/>`;
+  el.innerHTML = svg + "</svg>";
+  const sv = el.querySelector("svg"), xh = el.querySelector(".xh");
+  el.querySelector(".hit").addEventListener("mousemove", e => {
+    const b = sv.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    const i = Math.max(0, Math.min(data.length - 1, Math.round((px - L) / iw * (data.length - 1))));
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
+    showTip(`<b>${fmtDate(data[i].date)}</b>` + series.map(s => `<br><i style="background:${s.color}"></i>${s.label} ${data[i][s.key]}`).join(""), e.clientX, e.clientY);
+  });
+  el.querySelector(".hit").addEventListener("mouseleave", () => { hideTip(); xh.setAttribute("visibility", "hidden"); });
 }
 
 function lineChart(el, data) {
@@ -425,6 +483,7 @@ document.addEventListener("mousemove", e => {
 });
 
 /* ---------------------------------------------------------------- state */
+let teamView = store.get("bm-team") || "board", CONF = {};
 let OV = null, ISSUES = [], GH = {summary: null, prs: [], branches: []}, MINE = null, mineView = store.get("bm-mine") || "board";
 let bScope = "open", bSort = {k: "urgency", d: -1}, ghFilter = "mine";
 let view = store.get("bm-view") || "overview";
@@ -468,6 +527,81 @@ function renderOvGitHub() {
       <div><div class="value num" style="font-size:22px;font-weight:650">${s.failing}</div><div class="sub">failing</div></div></div>
     <div class="list">${mine.map(p => `<div class="li" data-pr="${esc(p.repo)}|${p.number}" style="cursor:pointer"><div class="grow"><div class="t1"><span class="key">${prRef(p)}</span> ${esc(p.title)}</div>
       <div class="t2">${prBadge(p.status)} <span class="muted">· ${esc(devReview(p.reviewers, p.approvals)[1])} · ${p.comments_count || 0} comments${p.unresolved_threads ? `, ${p.unresolved_threads} open` : ""}</span></div></div></div>`).join("") || '<div class="empty">No open PRs</div>'}</div>`;
+}
+
+/* ---------------------------------------------------------------- team */
+const miniCard = t => `<span class="mini ${t.stuck ? "stuck" : ""}" data-open="${esc(t.key)}" title="${esc(t.summary)}">
+  <span class="k">${esc(t.key)}</span> ${t.story_points ? `<span class="chip">${t.story_points} pt</span>` : ""}
+  <span style="display:block">${esc((t.summary || "").slice(0, 70))}${(t.summary || "").length > 70 ? "…" : ""}</span>
+  <span class="muted">${t.in_status_hours != null ? hrs(t.in_status_hours) + " here" : "done"}${t.stuck ? " · stuck" : ""}</span></span>`;
+
+async function renderTeam() {
+  document.querySelectorAll("#team-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === teamView));
+  const body = $("#team-body");
+  if (!CONF.team_enabled) {
+    body.innerHTML = `<div class="banner" style="margin:16px">Team views are off. Run <code>bugmonitor init</code> and turn on team views,
+      or set <code>jql</code> under <code>[team]</code> in your settings file, then add teammates under <code>[[team.members]]</code>.</div>`;
+    return;
+  }
+  const d = await j("/api/team/" + teamView);
+  if (teamView === "board") {
+    body.innerHTML = `<div class="tboard"><table><thead><tr><th class="nosort">Person</th>${d.statuses.map(st =>
+      `<th class="nosort">${esc(st)} <span class="count num">${d.totals[st]}</span></th>`).join("")}</tr></thead><tbody>
+      ${d.rows.map(r => `<tr><td><span class="person">${esc(r.person)}<span class="sub">${r.wip} in progress · ${r.open} open${r.points_open ? ` · ${r.points_open} pt` : ""}${r.stuck ? ` · <span class="overdue">${r.stuck} stuck</span>` : ""}</span></span></td>
+        ${d.statuses.map(st => `<td>${(r.tickets[st] || []).map(miniCard).join("")}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div>`;
+  } else if (teamView === "sprint") {
+    body.innerHTML = d.sprints.length ? d.sprints.map((sp, i) => `<div class="pad">
+      <div class="h-row"><h3 style="margin:0">${esc(sp.name)}</h3><span class="sub">${fmtDate(sp.start.slice(0, 10))} to ${sp.end ? fmtDate(sp.end.slice(0, 10)) : "?"}
+        · ${sp.days_left != null ? (sp.days_left < 0 ? `<span class="overdue">${Math.abs(sp.days_left)} days over</span>` : `${sp.days_left} days left`) : ""}</span></div>
+      ${sp.goal ? `<div class="sub" style="margin-bottom:12px">Goal: ${esc(sp.goal)}</div>` : ""}
+      <div class="grid kpis">${[["Done", `${sp.done_pct}%`, `${sp.by_category.done} of ${sp.total} ${sp.unit}`],
+        ["In progress", sp.by_category.indeterminate, sp.unit], ["To do", sp.by_category.new, sp.unit],
+        ["Added after start", sp.added_after_start.length, "tickets"], ["Carried over", sp.carried_over.length, "from earlier sprints"],
+        ["Tickets", sp.tickets.length, ""]].map(([l, v, h]) => `<div class="card kpi"><div class="label">${l}</div><div class="value num">${v}</div><div class="hint">${h}</div></div>`).join("")}</div>
+      <div class="card"><div class="card-h"><h3>Burnup (${sp.unit})</h3><div class="legend"><span><i style="background:var(--series-1)"></i>Scope</span><span><i style="background:var(--series-2)"></i>Done</span></div></div>
+        <div class="card-b"><div class="chart" id="burn-${i}"></div></div></div>
+      <div class="board" style="padding:16px 0">${["new", "indeterminate", "done"].map(c => `<div class="col cat-${c}"><div class="col-h"><b>${{new: "To do", indeterminate: "In progress", done: "Done"}[c]}</b></div>
+        ${sp.tickets.filter(t => t.status_category === c).map(miniCard).join("") || '<div class="muted" style="font-size:12px">None</div>'}</div>`).join("")}</div>
+    </div>`).join("") : '<div class="empty" style="padding:32px">No active sprint found for your team tickets.</div>';
+    d.sprints.forEach((sp, i) => multiLine($(`#burn-${i}`), sp.burnup, [{key: "scope", label: "Scope", color: "var(--series-1)"}, {key: "done", label: "Done", color: "var(--series-2)"}], "Sprint burnup"));
+  } else if (teamView === "releases") {
+    body.innerHTML = d.releases.length ? `<div class="rcards">${d.releases.map(r => `<div class="rcard">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.project)} ${esc(r.name)}</b>
+        <span class="${r.overdue ? "overdue" : "sub"}">${r.release_date ? (r.overdue ? `Overdue since ${fmtDate(r.release_date)}` : `${fmtDate(r.release_date)} · ${r.days_left} days`) : "No date"}</span></div>
+      <div class="prog"><i style="width:${r.progress}%"></i></div>
+      <div class="sub num">${r.done} of ${r.total} done (${r.progress}%) · ${r.by_category.indeterminate} in progress · ${r.by_category.new} to do · ${r.open_prs.length} open PR${r.open_prs.length === 1 ? "" : "s"}</div>
+      ${r.blockers.length ? `<div><div class="st critical">${ICON.critical}${r.blockers.length} high-priority bug${r.blockers.length === 1 ? "" : "s"} open</div>${r.blockers.map(miniCard).join("")}</div>` : stBadge("good", "No high-priority bugs open")}
+      ${r.open.length ? `<details><summary class="sub" style="cursor:pointer">Open tickets (${r.open.length})</summary><div style="margin-top:8px">${r.open.slice(0, 30).map(miniCard).join("")}</div></details>` : ""}
+    </div>`).join("")}</div>` : '<div class="empty" style="padding:32px">No unreleased versions with tickets in your scope.</div>';
+  } else if (teamView === "reviews") {
+    body.innerHTML = `<div class="grid two pad"><div><table><thead><tr><th class="nosort">Pull request</th><th class="nosort">Waiting</th><th class="nosort">Reviews</th><th class="nosort">Comments</th></tr></thead><tbody>
+      ${d.queue.map(q => `<tr data-pr="${esc(q.repo)}|${q.number}"><td class="wrap"><span class="muted">${esc(q.repo.split("/")[1])}#${q.number}</span> ${esc(q.title)}<div class="sub">by ${esc(q.author)} · +${q.additions ?? 0} −${q.deletions ?? 0}</div></td>
+        <td class="num ${q.overdue ? "overdue" : ""}">${hrs(q.waiting_hours)}</td>
+        <td><div class="chips">${q.reviewers.map(rvChip).join("") || '<span class="muted">No reviewers</span>'}</div></td>
+        <td class="num">${q.comments}${q.unresolved ? ` · ${q.unresolved} open` : ""}</td></tr>`).join("") || '<tr><td colspan="4" class="empty">Nothing waiting on review.</td></tr>'}
+      </tbody></table><div class="sub" style="margin-top:8px">Red means waiting longer than ${d.threshold_hours} hours.</div></div>
+      <div class="card"><div class="card-h"><h3>Pending reviews per person</h3></div><div class="card-b"><div class="hbars" id="rv-load"></div></div></div></div>`;
+    hbars($("#rv-load"), d.load.map(x => ({label: x.reviewer, n: x.pending})));
+  } else if (teamView === "qa") {
+    const cls = {"Deployed": "good", "Merged, not deployed yet": "warning", "PR still open": "serious", "No PR linked": "neutral"};
+    body.innerHTML = `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Ticket</th><th class="nosort">Assignee</th><th class="nosort">Status</th>
+      <th class="nosort">Time here</th><th class="nosort">Ready to test?</th><th class="nosort">Pull requests</th></tr></thead><tbody>
+      ${d.tickets.map(t => `<tr data-open="${esc(t.key)}"><td class="wrap"><span class="key">${esc(t.key)}</span> ${esc(t.summary)}</td><td>${esc(t.assignee || "Unassigned")}</td>
+        <td><span class="pill">${esc(t.status)}</span></td><td class="num ${t.stuck ? "overdue" : ""}">${hrs(t.in_status_hours)}</td>
+        <td>${stBadge(cls[t.testable] || "neutral", t.testable)}${t.environments.length ? `<div class="sub">${esc(t.environments.join(", "))}</div>` : ""}</td>
+        <td>${t.prs.map(p => `<span data-pr="${esc(p.repo)}|${p.number}" class="chip" style="cursor:pointer">#${p.number} ${esc(p.state.toLowerCase())}</span>`).join(" ") || '<span class="muted">—</span>'}</td></tr>`).join("")
+        || `<tr><td colspan="6" class="empty">Nothing in ${esc(d.statuses.join(", "))}.</td></tr>`}</tbody></table></div>`;
+  } else if (teamView === "stuck") {
+    body.innerHTML = `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Item</th><th class="nosort">Owner</th><th class="nosort">Status</th>
+      <th class="nosort">Time stuck</th><th class="nosort">Limit</th><th class="nosort">Waiting on</th></tr></thead><tbody>
+      ${d.items.map(i => `<tr ${i.type === "ticket" ? `data-open="${esc(i.key)}"` : `data-href="${esc(i.url)}"`}>
+        <td class="wrap"><span class="chip">${i.type === "pr" ? "PR" : "Ticket"}</span> <span class="key">${esc(i.key)}</span> ${esc(i.title)}</td>
+        <td>${esc(i.owner)}</td><td><span class="pill">${esc(i.status)}</span></td>
+        <td class="num overdue">${days(i.days)}</td><td class="num muted">${days(i.limit_days)}</td>
+        <td>${esc((i.waiting_on || []).join(", ")) || '<span class="muted">—</span>'}</td></tr>`).join("") || '<tr><td colspan="6" class="empty">Nothing stuck. Nice.</td></tr>'}
+      </tbody></table></div>`;
+  }
 }
 
 /* ---------------------------------------------------------------- my tickets */
@@ -749,7 +883,11 @@ async function refresh() {
     : sy.last_sync_finished ? `Synced ${ago(sy.last_sync_finished)} ago` : "Waiting for first sync";
   $("#ov-sub").innerHTML = `Projects: <b>${esc((sy.projects || []).join(", ") || "none yet")}</b> · <span title="${esc(sy.jql || "")}">filter: ${esc(sy.jql || "—")}</span>`;
   el.title = sy.last_sync_error || "";
+  CONF = await j("/api/config");
+  $("#team-title").textContent = CONF.team ? `Team · ${CONF.team}` : "Team";
+  if (CONF.team_enabled) { const st = await j("/api/team/stuck"); $("#c-team").textContent = st.items.length; $("#c-team").classList.toggle("hot", st.items.length > 0); }
   renderOverview(); renderMine(); renderBugs(); renderGitHub();
+  if (view === "team") renderTeam();
   if (view === "activity") renderActivity();
 }
 
@@ -759,6 +897,7 @@ function show(v) {
   document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === "v-" + v));
   if (v === "overview") renderOverview();
   if (v === "activity") renderActivity();
+  if (v === "team") renderTeam();
 }
 
 document.addEventListener("click", async ev => {
@@ -774,6 +913,7 @@ document.addEventListener("click", async ev => {
   if (ack) { await j(`/api/alerts/${ack.dataset.ack}/ack`, {method: "POST"}); renderActivity(); return refresh(); }
   const sb = ev.target.closest("#b-scope button");
   if (sb) { bScope = sb.dataset.v; document.querySelectorAll("#b-scope button").forEach(b => b.setAttribute("aria-pressed", b === sb)); return renderBugs(); }
+  const tb = ev.target.closest("#team-seg button"); if (tb) { teamView = tb.dataset.v; store.set("bm-team", teamView); return renderTeam(); }
   const mb = ev.target.closest("#mine-seg button"); if (mb) { mineView = mb.dataset.v; store.set("bm-mine", mineView); return renderMine(); }
   const gb = ev.target.closest("#gh-seg button"); if (gb) { ghFilter = gb.dataset.v; return renderGitHub(); }
   const th = ev.target.closest("#v-bugs th[data-s]");

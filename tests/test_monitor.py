@@ -42,7 +42,7 @@ class FakeJira:
 
     me = "Ali Naeem"
 
-    def search(self, jql):
+    def search(self, jql, extra_fields=None):
         self.queries.append(jql)
         if "currentUser()" in jql:  # the my-tickets query
             yield from (i for i in self.issues.values()

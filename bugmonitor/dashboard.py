@@ -32,6 +32,12 @@ def _background_sync(settings: Settings) -> None:
         conn.close()
 
 
+def _public_config(settings: Settings) -> dict:
+    """What the dashboard needs to know about the setup, without any secrets."""
+    return {"team_enabled": bool(settings.team.jql), "team": settings.team.name,
+            "github_enabled": settings.github.enabled, "members": len(settings.team.members)}
+
+
 def make_handler(settings: Settings):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -59,6 +65,12 @@ def make_handler(settings: Settings):
                     return self._json(service.summary(conn))
                 if u.path == "/api/overview":
                     return self._json(service.overview(conn, settings, int(q.get("days", 60))))
+                m = re.fullmatch(r"/api/team/(board|sprint|releases|reviews|qa|stuck)", u.path)
+                if m:
+                    from . import team
+                    return self._json(getattr(team, m.group(1))(conn, settings))
+                if u.path == "/api/config":
+                    return self._json(_public_config(settings))
                 if u.path == "/api/mine":
                     return self._json(service.my_tickets(conn))
                 if u.path == "/api/issues":

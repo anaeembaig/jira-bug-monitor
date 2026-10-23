@@ -116,6 +116,49 @@ def my_tickets(status: str | None = None) -> dict:
 
 
 @mcp.tool()
+def team_board() -> dict:
+    """Team board: every teammate's tickets by status, with work in progress, open points,
+    and stuck counts per person. Needs [team] jql."""
+    from . import team
+    return team.board(conn, settings)
+
+
+@mcp.tool()
+def sprint_status() -> dict:
+    """Active sprint(s): progress, scope added after the start, carried-over work, burnup, tickets."""
+    from . import team
+    return team.sprint(conn, settings)
+
+
+@mcp.tool()
+def release_status() -> dict:
+    """Unreleased Jira versions: progress, days left, blocking high-priority bugs, open PRs."""
+    from . import team
+    return team.releases(conn, settings)
+
+
+@mcp.tool()
+def review_queue() -> dict:
+    """Team PRs waiting on review, oldest first, plus how many reviews each person has pending."""
+    from . import team
+    return team.reviews(conn, settings)
+
+
+@mcp.tool()
+def qa_handoff() -> dict:
+    """Tickets in QA statuses and whether they're testable: PR merged, deployed, or still open."""
+    from . import team
+    return team.qa(conn, settings)
+
+
+@mcp.tool()
+def stuck_work(only_mine: bool = False) -> dict:
+    """Tickets in a status longer than the team's limit, and PRs waiting too long for review."""
+    from . import team
+    return team.stuck(conn, settings, only_mine)
+
+
+@mcp.tool()
 def bug_trends(days: int = 60) -> dict:
     """60-day picture: weekly created vs resolved, open backlog by day, open bugs by status,
     priority, assignee, and age, plus KPIs like median time to resolve."""

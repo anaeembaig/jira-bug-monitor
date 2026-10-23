@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -14,7 +15,7 @@ from .jira_client import JiraClient
 from .locks import FileLock
 
 log = logging.getLogger("bugmonitor.sync")
-TRACKED_FIELDS = {"status": "status", "assignee": "assignee", "priority": "priority",
+TRACKED_FIELDS = {"status": "status", "assignee": "assignee", "priority": "priority", "Sprint": "sprint",
                   "resolution": "resolution"}
 
 
@@ -22,10 +23,18 @@ def _name(obj, attr="name"):
     return obj.get(attr) if isinstance(obj, dict) else None
 
 
-def map_issue(raw: dict, client: JiraClient) -> dict:
+def map_issue(raw: dict, client: JiraClient, custom: dict | None = None) -> dict:
     f = raw.get("fields", {})
     status = f.get("status") or {}
+    custom = custom or {}
+    sprints = f.get(custom.get("sprint", ""), None) or []
+    points = f.get(custom.get("points", ""), None)
     return {
+        "sprint_ids": [s_.get("id") for s_ in sprints if isinstance(s_, dict)],
+        "_sprints": [s_ for s_ in sprints if isinstance(s_, dict)],
+        "story_points": points if isinstance(points, (int, float)) else None,
+        "fix_versions": [v.get("name") for v in f.get("fixVersions") or [] if isinstance(v, dict)],
+        "_comments": ((f.get("comment") or {}).get("comments") or []),
         "key": raw["key"],
         "id": raw.get("id"),
         "project": _name(f.get("project"), "key"),
@@ -51,15 +60,18 @@ def map_issue(raw: dict, client: JiraClient) -> dict:
 UPSERT_COLS = ["key", "id", "project", "issuetype", "summary", "status", "status_category",
                "priority", "assignee", "assignee_id", "reporter", "created", "updated", "resolved",
                "components", "labels", "original_estimate_sec", "time_spent_sec", "url", "urgency",
-               "reopen_count", "first_seen", "last_synced", "in_bugs", "in_mine"]
+               "reopen_count", "first_seen", "last_synced", "in_bugs", "in_mine", "in_team",
+               "story_points", "sprint_ids", "fix_versions"]
 
 
 def _upsert(conn, d: dict, first_seen: str | None, scope: str) -> None:
     """Insert or update a ticket. `scope` (bugs | mine) is switched on; the other is kept."""
     vals = dict(d, components=json.dumps(d["components"]), labels=json.dumps(d["labels"]),
+                sprint_ids=json.dumps(d.get("sprint_ids") or []),
+                fix_versions=json.dumps(d.get("fix_versions") or []),
                 first_seen=first_seen, last_synced=now_iso(),
-                in_bugs=1 if scope == "bugs" else 0, in_mine=1 if scope == "mine" else 0)
-    keep = {"key", "first_seen", "in_bugs", "in_mine"}
+                in_bugs=int(scope == "bugs"), in_mine=int(scope == "mine"), in_team=int(scope == "team"))
+    keep = {"key", "first_seen", "in_bugs", "in_mine", "in_team"}
     conn.execute(
         f"INSERT INTO issues({','.join(UPSERT_COLS)}) VALUES({','.join('?' * len(UPSERT_COLS))}) "
         f"ON CONFLICT(key) DO UPDATE SET "
@@ -106,7 +118,7 @@ def _reopen_count(conn, key: str, cats: dict) -> int:
 def _forget(conn, keys: list[str]) -> int:
     """Drop tickets from the dashboard. Local work logs are kept for your records."""
     for k in keys:
-        for table in ("issues", "events", "alerts"):
+        for table in ("issues", "events", "alerts", "jira_comments"):
             conn.execute(f"DELETE FROM {table} WHERE key=?", (k,))
     return len(keys)
 
@@ -130,8 +142,12 @@ class _Ctx:
         self.conn, self.s, self.client, self.alerter, self.started = conn, settings, client, alerter, started
         self.cats = status_categories(conn)
         self.me_id, self.me_name = _whoami(conn, client)
+        self.custom = _custom_fields(conn, client, settings)
+        self.extra = [f for f in (self.custom.get("sprint"), self.custom.get("points")) if f]
+        if settings.jira.fetch_comments:
+            self.extra.append("comment")
         self.stats = {"seen": 0, "new": 0, "changed": 0, "alerts": 0, "removed": 0,
-                      "first_sync": False, "mine": 0}
+                      "first_sync": False, "mine": 0, "team": 0}
 
     def is_me(self, d: dict | None) -> bool:
         if not d:
@@ -143,6 +159,109 @@ class _Ctx:
     def alert(self, d, kind, detail="", external=None):
         self.alerter.raise_alert(d, kind, detail, external=external)
         self.stats["alerts"] += 1
+
+
+def _custom_fields(conn, client, settings) -> dict:
+    """Find the Sprint and Story Points field IDs once (they differ per Jira site)."""
+    cached = get_state(conn, "custom_fields")
+    if cached:
+        found = json.loads(cached)
+    else:
+        found = {}
+        if hasattr(client, "fields"):
+            try:
+                for f in client.fields():
+                    custom = ((f.get("schema") or {}).get("custom") or "")
+                    name = (f.get("name") or "").lower()
+                    if custom.endswith("gh-sprint"):
+                        found["sprint"] = f["id"]
+                    elif name in ("story points", "story point estimate") and "points" not in found:
+                        found["points"] = f["id"]
+            except Exception as e:
+                log.warning("Couldn't read Jira fields: %s", e)
+        set_state(conn, "custom_fields", json.dumps(found))
+    if settings.team.story_points_field:
+        found["points"] = settings.team.story_points_field
+    return found
+
+
+def _adf_text(node, mentions: list) -> str:
+    """Flatten Atlassian Document Format to text, collecting @mentioned account IDs."""
+    if isinstance(node, str):
+        return node
+    if not isinstance(node, dict):
+        return ""
+    t = node.get("type")
+    if t == "text":
+        return node.get("text", "")
+    if t == "mention":
+        attrs = node.get("attrs") or {}
+        if attrs.get("id"):
+            mentions.append(attrs["id"])
+        return attrs.get("text") or "@someone"
+    inner = "".join(_adf_text(c, mentions) for c in node.get("content") or [])
+    return inner + ("\n" if t in ("paragraph", "heading", "listItem", "codeBlock") else "")
+
+
+def _store_comments(ctx: "_Ctx", d: dict, quiet: bool) -> None:
+    conn = ctx.conn
+    for c in d.get("_comments") or []:
+        if not c.get("id"):
+            continue
+        mentions: list = []
+        body = c.get("body")
+        text = _adf_text(body, mentions).strip() if isinstance(body, dict) else (body or "")
+        author = c.get("author") or {}
+        exists = conn.execute("SELECT 1 FROM jira_comments WHERE id=?", (c["id"],)).fetchone()
+        conn.execute(
+            "INSERT OR REPLACE INTO jira_comments(id, key, author, author_id, created, body, mentions) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (c["id"], d["key"], author.get("displayName"), author.get("accountId"), c.get("created"),
+             text[:2000], json.dumps(mentions)))
+        if (not exists and not quiet and ctx.s.alerts.mentions and ctx.me_id
+                and ctx.me_id in mentions and author.get("accountId") != ctx.me_id):
+            snippet = " ".join(text.split())[:180]
+            ctx.alert(d, "mentioned", f"{author.get('displayName')}: {snippet}", external=True)
+
+
+def _store_sprints(conn, d: dict) -> None:
+    for sp in d.get("_sprints") or []:
+        conn.execute(
+            "INSERT OR REPLACE INTO sprints(id, board_id, name, state, start, end, complete, goal) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (sp.get("id"), sp.get("boardId"), sp.get("name"), sp.get("state"), sp.get("startDate"),
+             sp.get("endDate"), sp.get("completeDate"), sp.get("goal")))
+
+
+def _refresh_versions(conn, client, settings, keys: list[str]) -> None:
+    """Fix versions for the projects in scope, at most once an hour."""
+    last = get_state(conn, "versions_refreshed")
+    if last and (datetime.now(timezone.utc) - parse_ts(last)).total_seconds() < 3600:
+        return
+    if not hasattr(client, "versions"):
+        return
+    for p in keys:
+        try:
+            for v in client.versions(p):
+                conn.execute(
+                    "INSERT OR REPLACE INTO versions(id, project, name, released, archived, release_date, "
+                    "description) VALUES(?,?,?,?,?,?,?)",
+                    (str(v.get("id")), p, v.get("name"), int(bool(v.get("released"))),
+                     int(bool(v.get("archived"))), v.get("releaseDate"), v.get("description")))
+        except Exception as e:
+            log.warning("Couldn't read versions for %s: %s", p, e)
+    set_state(conn, "versions_refreshed", now_iso())
+    conn.commit()
+
+
+def project_keys(*jqls: str) -> list[str]:
+    keys: list[str] = []
+    for q in jqls:
+        m = re.search(r"project\s+in\s*\(([^)]*)\)", q or "", re.I)
+        found = [k.strip().strip("'\"") for k in m.group(1).split(",")] if m else \
+            re.findall(r"project\s*=\s*['\"]?([A-Za-z0-9_]+)", q or "", re.I)
+        keys += [k.upper() for k in found if k and k.upper() not in keys]
+    return keys
 
 
 def _whoami(conn, client) -> tuple[str, str]:
@@ -161,7 +280,7 @@ def _whoami(conn, client) -> tuple[str, str]:
 def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
     """Store one ticket from either query and raise any alerts. `quiet` = initial load."""
     conn, s, a = ctx.conn, ctx.s, ctx.s.alerts
-    d = map_issue(raw, ctx.client)
+    d = map_issue(raw, ctx.client, ctx.custom)
     if d["status"] and d["status_category"]:
         ctx.cats[d["status"]] = d["status_category"]
     old = row_to_dict(conn.execute("SELECT * FROM issues WHERE key=?", (d["key"],)).fetchone())
@@ -187,6 +306,8 @@ def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
     d["reopen_count"] = _reopen_count(conn, d["key"], ctx.cats)
     d["urgency"] = urgency_score(d, s)
     _upsert(conn, d, first_seen=now_iso(), scope=scope)
+    _store_sprints(conn, d)
+    _store_comments(ctx, d, quiet)
     conn.commit()  # release the write lock after each ticket
 
     if quiet:
@@ -235,7 +356,7 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     cutoff = (started - timedelta(days=settings.jira.retention_days)
               if settings.jira.retention_days else None)
     seen: set[str] = set()
-    for raw in client.search(jql):
+    for raw in client.search(jql, extra_fields=ctx.extra):
         created = parse_ts((raw.get("fields") or {}).get("created"))
         if cutoff and (created or started) < cutoff:
             continue  # outside the retention window: never store or alert
@@ -252,7 +373,7 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     if my_jql:
         mine_first = get_state(conn, "my_jql_scope") != my_jql
         mine_seen: set[str] = set()
-        for raw in client.search(f"({my_jql}) ORDER BY updated DESC"):
+        for raw in client.search(f"({my_jql}) ORDER BY updated DESC", extra_fields=ctx.extra):
             mine_seen.add(raw["key"])
             _process(ctx, raw, "mine", quiet=mine_first)
         for r in conn.execute("SELECT key FROM issues WHERE in_mine=1").fetchall():
@@ -263,6 +384,34 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     else:
         conn.execute("UPDATE issues SET in_mine=0")
 
+    # ---- team tickets: incremental, with a full re-read once a day to drop what left scope
+    team_jql = settings.team.jql.strip()
+    if team_jql:
+        team_first = get_state(conn, "team_jql_scope") != team_jql
+        today = datetime.now().date().isoformat()
+        full = team_first or get_state(conn, "team_full_date") != today
+        last_t = get_state(conn, "team_last_sync")
+        if full or not last_t:
+            q = f"({team_jql}) ORDER BY updated DESC"
+        else:
+            minutes = int((started - parse_ts(last_t)).total_seconds() // 60) + 5
+            q = f"({team_jql}) AND updated >= -{minutes}m ORDER BY updated DESC"
+        team_seen: set[str] = set()
+        for raw in client.search(q, extra_fields=ctx.extra):
+            team_seen.add(raw["key"])
+            _process(ctx, raw, "team", quiet=team_first)
+        if full:
+            for r in conn.execute("SELECT key FROM issues WHERE in_team=1").fetchall():
+                if r["key"] not in team_seen:
+                    conn.execute("UPDATE issues SET in_team=0 WHERE key=?", (r["key"],))
+            set_state(conn, "team_full_date", today)
+        stats["team"] = len(team_seen)
+        set_state(conn, "team_jql_scope", team_jql)
+        set_state(conn, "team_last_sync", started.isoformat())
+    else:
+        conn.execute("UPDATE issues SET in_team=0")
+    _refresh_versions(conn, client, settings, project_keys(base, team_jql))
+
     # ---- keep the store in scope (your own tickets are kept while they're yours)
     if scope_changed:
         for r in conn.execute("SELECT key FROM issues WHERE in_bugs=1").fetchall():
@@ -272,7 +421,8 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
         for r in conn.execute("SELECT key, created FROM issues WHERE in_bugs=1").fetchall():
             if (parse_ts(r["created"]) or started) < cutoff:
                 conn.execute("UPDATE issues SET in_bugs=0 WHERE key=?", (r["key"],))
-    orphans = [r["key"] for r in conn.execute("SELECT key FROM issues WHERE in_bugs=0 AND in_mine=0")]
+    orphans = [r["key"] for r in conn.execute(
+        "SELECT key FROM issues WHERE in_bugs=0 AND in_mine=0 AND in_team=0")]
     stats["removed"] += _forget(conn, orphans)
 
     # Age changes urgency even when Jira doesn't, so re-score every open ticket.
