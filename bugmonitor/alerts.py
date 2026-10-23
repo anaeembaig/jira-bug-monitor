@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 import platform
 import shutil
 import smtplib
@@ -36,7 +37,25 @@ TITLES = {
 }
 
 
-def teams_card(title: str, issue: dict, kind: str, detail: str, dash) -> dict:
+def summary_card(heading: str, items: list[tuple], dash, color: str = "Default") -> dict:
+    body = [{"type": "TextBlock", "text": heading, "weight": "Bolder", "size": "Medium", "wrap": True,
+             "color": color}]
+    for title, text, url in items[:15]:
+        line = f"[{title}]({url})" if url else title
+        body.append({"type": "TextBlock", "text": line, "wrap": True, "spacing": "Small"})
+        if text:
+            body.append({"type": "TextBlock", "text": text, "wrap": True, "isSubtle": True,
+                         "spacing": "None", "maxLines": 2})
+    if len(items) > 15:
+        body.append({"type": "TextBlock", "text": f"…and {len(items) - 15} more on the dashboard",
+                     "isSubtle": True, "wrap": True})
+    return {"type": "AdaptiveCard", "version": "1.4",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "body": body,
+            "actions": [{"type": "Action.OpenUrl", "title": "Open dashboard",
+                         "url": f"http://{dash.host}:{dash.port}"}]}
+
+
+def teams_card(title: str, issue: dict, kind: str, detail: str, dash, mention: dict | None = None) -> dict:
     url = issue.get("url") or ""
     is_pr = "github.com" in url
     facts = [{"title": t, "value": v} for t, v in (
@@ -61,9 +80,15 @@ def teams_card(title: str, issue: dict, kind: str, detail: str, dash) -> dict:
                         "url": url})
     actions.append({"type": "Action.OpenUrl", "title": "Open dashboard",
                     "url": f"http://{dash.host}:{dash.port}"})
-    return {"type": "AdaptiveCard", "version": "1.4",
+    card = {"type": "AdaptiveCard", "version": "1.4",
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "body": body, "actions": actions}
+    if mention:
+        tag = f"<at>{mention['name']}</at>"
+        body.append({"type": "TextBlock", "text": f"Assigned to {tag}", "wrap": True})
+        card["msteams"] = {"entities": [{"type": "mention", "text": tag,
+                                         "mentioned": {"id": mention["email"], "name": mention["name"]}}]}
+    return card
 
 
 def desktop_notify(title: str, body: str) -> bool:
@@ -112,6 +137,26 @@ CARD_COLOR = {
 }
 
 
+# Events that go to team channels ([[routes]]); everything else is personal.
+TEAM_EVENTS = {"new_bug", "priority_raised", "reopened", "escalation", "stuck"}
+
+
+def _hhmm(text: str):
+    h, m = (text.strip() + ":0").split(":")[:2]
+    return int(h) * 60 + int(m)
+
+
+def in_quiet_hours(notify, now: datetime | None = None) -> bool:
+    now = now or datetime.now()  # local time on purpose
+    if notify.quiet_weekends and now.weekday() >= 5:
+        return True
+    if not notify.quiet_hours or "-" not in notify.quiet_hours:
+        return False
+    start, end = (_hhmm(x) for x in notify.quiet_hours.split("-", 1))
+    t = now.hour * 60 + now.minute
+    return (start <= t < end) if start < end else (t >= start or t < end)
+
+
 class Alerter:
     def __init__(self, settings: Settings, conn):
         self.s = settings
@@ -120,13 +165,40 @@ class Alerter:
 
     def _external_ok(self, priority: str | None) -> bool:
         # A priority we can't rank is never silently dropped.
-        if not self.s.known_priority(priority):
-            return True
-        return self.s.priority_rank(priority) >= self.s.priority_rank(self.a.external_min_priority)
+        return self.s.at_least(priority, self.a.external_min_priority)
 
-    def raise_alert(self, issue: dict, kind: str, detail: str = "",
-                    external: bool | None = None) -> int:
-        """external=None: Teams/Slack/email only at or above external_min_priority."""
+    def _urgent(self, kind: str, issue: dict) -> bool:
+        return kind in ("escalation", "sync_failing") or (
+            kind in ("new_bug", "reopened", "priority_raised") and self.s.is_high(issue.get("priority")))
+
+    def _routes_for(self, issue: dict, kind: str, route: str | None) -> list:
+        if route is not None:
+            r = self.s.route(route)
+            return [r] if r and r.webhook else []
+        if kind not in TEAM_EVENTS:
+            return []
+        project = issue.get("project") or (issue.get("key") or "").split("-")[0]
+        out = []
+        for r in self.s.routes:
+            if not r.webhook or kind not in r.events:
+                continue
+            if r.projects and project not in [p.upper() for p in r.projects]:
+                continue
+            if kind not in ("escalation", "stuck") and not self.s.at_least(
+                    issue.get("priority"), r.min_priority or self.a.external_min_priority):
+                continue
+            out.append(r)
+        return out
+
+    def raise_alert(self, issue: dict, kind: str, detail: str = "", external: bool | None = None,
+                    personal: bool = True, route: str | None = None, team: bool = True) -> int:
+        """Record an alert and deliver it.
+
+        personal: also send to your own desktop/Teams/Slack/email.
+          external=None means Teams/Slack/email only at or above external_min_priority.
+        Team channels ([[routes]]) get team events that match their projects and priority,
+        or exactly `route` when one is named (escalations).
+        """
         pri = f" ({issue['priority']})" if issue.get("priority") else ""
         title = f"{TITLES.get(kind, kind)}: {issue['key']}{pri}"
         body = issue.get("summary", "")
@@ -134,16 +206,15 @@ class Alerter:
             body = f"{detail} — {body}"
         message = f"{title} — {body}"
         channels = ["dashboard"]
+        urgent = self._urgent(kind, issue)
 
-        if self.a.desktop and desktop_notify(title, body):
-            channels.append("desktop")
-        if external if external is not None else self._external_ok(issue.get("priority")):
-            if self.a.slack_webhook and self._slack(title, body, issue):
-                channels.append("slack")
-            if self.a.teams_webhook and self._teams(title, body, issue, kind, detail):
-                channels.append("teams")
-            if self.a.email_enabled and self.a.email_to and self._email(title, body, issue):
-                channels.append("email")
+        if personal:
+            if self.a.desktop and desktop_notify(title, body):
+                channels.append("desktop")
+            if external if external is not None else self._external_ok(issue.get("priority")):
+                channels += self._deliver("private", title, body, issue, kind, detail, urgent)
+        for r in (self._routes_for(issue, kind, route) if team else []):
+            channels += self._deliver(f"route:{r.name}", title, body, issue, kind, detail, urgent, r)
 
         cur = self.conn.execute(
             "INSERT INTO alerts(key, ts, kind, priority, message, channels) VALUES(?,?,?,?,?,?)",
@@ -151,6 +222,58 @@ class Alerter:
         )
         self.conn.commit()
         return cur.lastrowid
+
+    def _deliver(self, target, title, body, issue, kind, detail, urgent, route=None) -> list[str]:
+        n = self.s.notify
+        if in_quiet_hours(n) and not (urgent and n.urgent_bypasses_quiet):
+            self.conn.execute("INSERT INTO outbox(ts, target, title, body, url) VALUES(?,?,?,?,?)",
+                              (now_iso(), target, title, body, issue.get("url")))
+            return [f"{target.replace('private', 'teams')} (held for quiet hours)"]
+        if route is not None:
+            mention = None
+            if route.mention_assignee and issue.get("assignee"):
+                m = self.s.member(name=issue["assignee"])
+                if m and m.get("email"):
+                    mention = {"name": issue["assignee"], "email": m["email"]}
+            card = teams_card(title, issue, kind, detail, self.s.dashboard, mention)
+            return [f"teams:{route.name}"] if self.post_card(route.webhook, card) else []
+        sent = []
+        if self.a.slack_webhook and self._slack(title, body, issue):
+            sent.append("slack")
+        if self.a.teams_webhook and self._teams(title, body, issue, kind, detail):
+            sent.append("teams")
+        if self.a.email_enabled and self.a.email_to and self._email(title, body, issue):
+            sent.append("email")
+        return sent
+
+    def post_card(self, webhook: str, card: dict) -> bool:
+        payload = {"type": "message", "attachments": [
+            {"contentType": "application/vnd.microsoft.card.adaptive", "content": card}]}
+        return self._post(webhook, payload, "Teams")
+
+    def flush_outbox(self) -> int:
+        """After quiet hours: one summary message per target instead of a burst."""
+        if in_quiet_hours(self.s.notify):
+            return 0
+        rows = self.conn.execute("SELECT * FROM outbox ORDER BY id").fetchall()
+        by_target: dict = {}
+        for r in rows:
+            by_target.setdefault(r["target"], []).append(r)
+        sent = 0
+        for target, items in by_target.items():
+            card = summary_card(f"While notifications were paused: {len(items)} update{'s' * (len(items) != 1)}",
+                                [(i["title"], i["body"], i["url"]) for i in items], self.s.dashboard)
+            if target == "private":
+                ok = bool(self.a.teams_webhook) and self.post_card(self.a.teams_webhook, card)
+            else:
+                r = self.s.route(target.split(":", 1)[1])
+                ok = bool(r and r.webhook) and self.post_card(r.webhook, card)
+            if ok or not (target == "private" and self.a.teams_webhook):
+                self.conn.execute(f"DELETE FROM outbox WHERE id IN ({','.join('?' * len(items))})",
+                                  [i["id"] for i in items])
+                sent += ok
+        self.conn.commit()
+        return sent
 
     # ----------------------------------------------------------------- channels
     def _slack(self, title, body, issue) -> bool:

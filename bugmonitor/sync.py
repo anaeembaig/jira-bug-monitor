@@ -465,12 +465,21 @@ def run_forever(conn, settings: Settings, client: JiraClient, stop_event=None) -
     while not (stop_event and stop_event.is_set()):
         try:
             sync_once(conn, settings, client, alerter)
+            set_state(conn, "sync_fail_count", "0")
+            conn.commit()
         except Exception as e:
             conn.rollback()
             set_state(conn, "last_sync_error", f"{now_iso()} {e}")
+            fails = int(get_state(conn, "sync_fail_count", "0") or 0) + 1
+            set_state(conn, "sync_fail_count", str(fails))
             conn.commit()
             log.exception("Sync failed")
+            if fails == 3 and settings.notify.sync_health:
+                alerter.raise_alert({"key": "Bug Monitor", "summary": str(e)[:300], "url": None},
+                                    "sync_failing", "3 syncs in a row failed", external=True, team=False)
         sync_github_safe(conn, settings, alerter)
+        from .jobs import run_all
+        run_all(conn, settings, alerter)
         if stop_event:
             stop_event.wait(interval)
         else:
