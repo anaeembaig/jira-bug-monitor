@@ -20,13 +20,19 @@ def run_all(conn, settings: Settings, alerter: Alerter | None = None, now: datet
     for name, fn in (("outbox", lambda: alerter.flush_outbox()),
                      ("escalations", lambda: escalations(conn, settings, alerter)),
                      ("stuck", lambda: stuck_reminders(conn, settings, alerter)),
-                     ("digests", lambda: digests(conn, settings, alerter, now))):
+                     ("digests", lambda: digests(conn, settings, alerter, now)),
+                     ("timelog", lambda: _timelog_reminder(conn, settings, alerter, now))):
         try:
             out[name] = fn()
         except Exception as e:  # one failing job never blocks the others
             log.warning("Job %s failed: %s", name, e)
             out[name] = f"error: {e}"
     return out
+
+
+def _timelog_reminder(conn, settings, alerter, now):
+    from .timelog import reminder
+    return reminder(conn, settings, alerter, now)
 
 
 def _once(conn, key: str) -> bool:
@@ -172,6 +178,11 @@ def personal_digest(conn, settings: Settings) -> dict:
     new = service.list_new(conn, 24)
     sections += _section(f"New bugs in the last 24 hours: {len(new)}",
                          [_link(b["key"], f"{b['summary']} ({b['priority'] or 'no priority'})", b["url"]) for b in new[:5]])
+    if settings.timelog.enabled and settings.timelog.recap_in_digest:
+        from .timelog import recap_lines
+        lines = recap_lines(conn, settings)
+        if lines:
+            sections += _section("Time log", lines)
     return _card(f"Good morning. Here's your day ({datetime.now().strftime('%a %b %d')})", sections, settings)
 
 

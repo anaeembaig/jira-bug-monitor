@@ -116,6 +116,31 @@ def my_tickets(status: str | None = None) -> dict:
 
 
 @mcp.tool()
+def my_timesheet(days: int = 7, person: str | None = None) -> dict:
+    """Day-by-day time: hours logged in Jira per ticket, time tracked from Claude sessions,
+    and what you did on each ticket (status changes, comments, PRs). Shows short days against
+    your daily target and tickets you worked on without logging time. person = a teammate's name."""
+    from .timelog import timesheet
+    return timesheet(conn, settings, days, person)
+
+
+@mcp.tool()
+def team_timesheet(days: int = 10) -> dict:
+    """Hours each teammate logged in Jira per day."""
+    from .timelog import team_time
+    return team_time(conn, settings, days)
+
+
+@mcp.tool()
+def log_time_to_jira(key: str, minutes: float, day: str | None = None, comment: str = "") -> dict:
+    """Add a worklog in Jira (writes to Jira). Only works when [timelog] allow_jira_write = true.
+    day is YYYY-MM-DD (default today). Confirm the details with the user before calling."""
+    from .timelog import log_to_jira
+    client = JiraClient(settings.jira.base_url, settings.jira.email, settings.jira.api_token)
+    return log_to_jira(conn, settings, client, key, minutes, day, comment)
+
+
+@mcp.tool()
 def team_board() -> dict:
     """Team board: every teammate's tickets by status, with work in progress, open points,
     and stuck counts per person. Needs [team] jql."""

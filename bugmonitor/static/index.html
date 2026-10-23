@@ -179,6 +179,16 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .overdue{color:var(--critical-ink);font-weight:600}
 .pad{padding:16px}
 
+/* ---------- time log */
+.day{border-top:1px solid var(--line)}
+.day summary{display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;list-style:none}
+.day summary::-webkit-details-marker{display:none}
+.day summary .d{width:110px;font-weight:600}
+.day .bar{flex:1;max-width:320px;height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden}
+.day .bar i{display:block;height:100%;background:var(--bar)}
+.act{display:flex;flex-wrap:wrap;gap:4px}
+.low{color:var(--serious-ink);font-weight:600}
+
 /* ---------- drawer */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .15s;z-index:30}
 .scrim.on{opacity:1;pointer-events:auto}
@@ -207,6 +217,7 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
       <button class="tab" role="tab" data-view="mine">My Tickets <span class="count num" id="c-mine">0</span></button>
       <button class="tab" role="tab" data-view="team">Team <span class="count num" id="c-team">0</span></button>
+      <button class="tab" role="tab" data-view="time">Time Log <span class="count num" id="c-time">0h</span></button>
       <button class="tab" role="tab" data-view="bugs">Bugs <span class="count num" id="c-bugs">0</span></button>
       <button class="tab" role="tab" data-view="github">GitHub <span class="count num" id="c-gh">0</span></button>
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
@@ -264,6 +275,12 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       </div></div>
       <div id="team-body"><div class="empty" style="padding:32px">Loading…</div></div>
     </div>
+  </section>
+
+  <!-- ================= TIME LOG ================= -->
+  <section class="view" id="v-time">
+    <div class="h-row"><h2>Time Log</h2><div class="seg" id="time-seg"><button data-v="me" aria-pressed="true">Me</button><button data-v="team" aria-pressed="false">Team</button></div></div>
+    <div id="time-body"></div>
   </section>
 
   <!-- ================= BUGS ================= -->
@@ -327,7 +344,10 @@ const ago = ts => { if (!ts) return ""; const s = (Date.now() - new Date(ts)) / 
   return Math.round(s/86400) + "d"; };
 const hrs = h => h == null ? "—" : h < 1 ? Math.round(h*60) + " min" : h < 48 ? h.toFixed(1) + " h" : (h/24).toFixed(1) + " days";
 const fmtDate = d => new Date(d + (d.length === 10 ? "T00:00:00" : "")).toLocaleDateString(undefined, {month:"short", day:"numeric"});
-async function j(url, opts) { const r = await fetch(url, opts); return r.json(); }
+async function j(url, opts) {
+  if (opts && opts.method === "POST") opts.headers = Object.assign({"X-Bugmonitor": "1", "Content-Type": "application/json"}, opts.headers || {});
+  const r = await fetch(url, opts); return r.json();
+}
 const store = { get(k){ try { return localStorage.getItem(k); } catch { return null; } },
                 set(k,v){ try { localStorage.setItem(k, v); } catch {} } };
 
@@ -483,7 +503,7 @@ document.addEventListener("mousemove", e => {
 });
 
 /* ---------------------------------------------------------------- state */
-let teamView = store.get("bm-team") || "board", CONF = {};
+let teamView = store.get("bm-team") || "board", CONF = {}, timeView = "me";
 let OV = null, ISSUES = [], GH = {summary: null, prs: [], branches: []}, MINE = null, mineView = store.get("bm-mine") || "board";
 let bScope = "open", bSort = {k: "urgency", d: -1}, ghFilter = "mine";
 let view = store.get("bm-view") || "overview";
@@ -602,6 +622,71 @@ async function renderTeam() {
         <td>${esc((i.waiting_on || []).join(", ")) || '<span class="muted">—</span>'}</td></tr>`).join("") || '<tr><td colspan="6" class="empty">Nothing stuck. Nice.</td></tr>'}
       </tbody></table></div>`;
   }
+}
+
+/* ---------------------------------------------------------------- time log */
+function dayBars(el, days, target) {
+  const data = days.slice().reverse(), W = el.clientWidth || 600, H = 180, L = 30, R = 8, T = 10, B = 24;
+  const max = niceMax(Math.max(target, ...data.map(d => d.logged_hours)));
+  const iw = W - L - R, ih = H - T - B, gw = iw / data.length, bw = Math.min(26, gw - 6), y = v => T + ih - v / max * ih;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Hours logged per day">`;
+  svg += [0, max / 2, max].map(t => `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><g class="axis"><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${t}</text></g>`).join("");
+  data.forEach((d, i) => {
+    const x = L + gw * i + (gw - bw) / 2, h = ih - (y(d.logged_hours) - T), r = Math.min(4, h, bw / 2);
+    if (d.logged_hours) svg += `<path d="M${x},${T + ih} v${-(h - r)} q0,${-r} ${r},${-r} h${bw - 2 * r} q${r},0 ${r},${r} v${h - r} z" fill="${d.workday ? "var(--bar)" : "var(--neutral)"}"/>`;
+    svg += `<g class="axis"><text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${d.weekday[0]}${new Date(d.date + "T00:00").getDate()}</text></g>`;
+    svg += `<rect x="${L + gw * i}" y="${T}" width="${gw}" height="${ih}" fill="transparent" data-i="${i}"/>`;
+  });
+  if (target) svg += `<line x1="${L}" x2="${W - R}" y1="${y(target)}" y2="${y(target)}" stroke="var(--ink-3)" stroke-dasharray="4 4"/><g class="axis"><text x="${W - R}" y="${y(target) - 4}" text-anchor="end">target ${target}h</text></g>`;
+  el.innerHTML = svg + "</svg>";
+  el.querySelectorAll("rect[data-i]").forEach(r => { const d = data[+r.dataset.i];
+    r.addEventListener("mousemove", e => showTip(`<b>${d.weekday} ${fmtDate(d.date)}</b><br>${d.logged_hours}h logged${d.tracked_hours ? `<br>${d.tracked_hours}h tracked in Claude` : ""}<br>${d.tickets.length} tickets`, e.clientX, e.clientY));
+    r.addEventListener("mouseleave", hideTip); });
+}
+
+async function renderTime() {
+  document.querySelectorAll("#time-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === timeView));
+  const body = $("#time-body");
+  if (timeView === "team") {
+    const d = await j("/api/timelog/team?days=10");
+    body.innerHTML = `<div class="card"><div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Person</th>
+      ${d.dates.map(x => `<th class="nosort num ${x.workday ? "" : "muted"}">${x.weekday} ${new Date(x.date + "T00:00").getDate()}</th>`).join("")}
+      <th class="nosort">Total</th><th class="nosort">Tickets</th></tr></thead><tbody>
+      ${d.rows.map(r => `<tr><td><b>${esc(r.person)}</b></td>${d.dates.map(x => { const h = r.days[x.date];
+        return `<td class="num ${x.workday && h < d.target_hours ? "low" : ""}">${h ? h : (x.workday ? "0" : "")}</td>`; }).join("")}
+        <td class="num"><b>${r.total}</b></td><td class="num">${r.tickets}</td></tr>`).join("") || '<tr><td colspan="13" class="empty">No worklogs yet.</td></tr>'}
+      </tbody></table></div><div class="sub pad">Hours logged in Jira. Highlighted workdays are under the ${d.target_hours}h target.</div></div>`;
+    return;
+  }
+  const d = await j("/api/timelog");
+  const today = d.days[0];
+  body.innerHTML = `
+    <div class="grid kpis">${[["Logged today", `${today.logged_hours}h`, `of ${today.target_hours}h target`],
+      ["This week", `${d.week.logged}h`, `of ${d.week.target}h so far`],
+      ["Tracked in Claude today", `${today.tracked_hours}h`, "from log_work"],
+      ["Worked on, not logged", today.unlogged_tickets.length, today.unlogged_tickets.join(", ") || "all logged"],
+      ["Tickets today", today.tickets.length, ""],
+      ["Short days", d.days.filter(x => x.workday && x.short_hours > 0 && x.date !== today.date).length, `in the last ${d.days.length} days`]]
+      .map(([l, v, h]) => `<div class="card kpi"><div class="label">${l}</div><div class="value num">${v}</div><div class="hint">${esc(h)}</div></div>`).join("")}</div>
+    <div class="card"><div class="card-h"><h3>Hours logged per day</h3></div><div class="card-b"><div class="chart" id="time-chart"></div></div></div>
+    <div class="card mt">${d.days.map((x, i) => `<details class="day" ${i === 0 ? "open" : ""}><summary>
+        <span class="d">${x.weekday} ${fmtDate(x.date)}</span>
+        <span class="bar"><i style="width:${Math.min(100, x.target_hours ? x.logged_hours / x.target_hours * 100 : (x.logged_hours ? 100 : 0))}%"></i></span>
+        <span class="num ${x.short_hours > 0 ? "low" : ""}">${x.logged_hours}h${x.target_hours ? ` / ${x.target_hours}h` : ""}</span>
+        ${x.tracked_hours ? `<span class="sub">${x.tracked_hours}h tracked</span>` : ""}
+        ${x.unlogged_tickets.length ? `<span class="st warning">${ICON.warning}${x.unlogged_tickets.length} not logged</span>` : ""}
+        <span class="sub" style="margin-left:auto">${x.tickets.length} ticket${x.tickets.length === 1 ? "" : "s"}</span></summary>
+      ${x.tickets.length ? `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Ticket</th><th class="nosort">Status</th>
+        <th class="nosort">Logged</th><th class="nosort">Tracked</th><th class="nosort">What you did</th>${d.can_write ? '<th class="nosort"></th>' : ""}</tr></thead><tbody>
+        ${x.tickets.map(t => `<tr data-open="${esc(t.key)}"><td class="wrap"><a class="key" href="${esc(t.url || "#")}" target="_blank" data-stop>${esc(t.key)}</a> ${esc(t.summary || "")}
+            ${t.comments.length ? `<div class="sub">${esc(t.comments.join(" · "))}</div>` : ""}</td>
+          <td>${t.status ? `<span class="pill">${esc(t.status)}</span>` : ""}</td>
+          <td class="num ${!t.logged_hours ? "muted" : ""}">${t.logged_hours ? t.logged_hours + "h" : "—"}</td>
+          <td class="num muted">${t.tracked_hours ? t.tracked_hours.toFixed(1) + "h" : "—"}</td>
+          <td><div class="act">${t.activity.map(a => `<span class="chip">${esc(a)}</span>`).join("") || '<span class="muted">—</span>'}</div></td>
+          ${d.can_write ? `<td><button class="btn" data-logtime="${esc(t.key)}|${x.date}|${t.tracked_hours || ""}" data-stop>Log time</button></td>` : ""}</tr>`).join("")}
+        </tbody></table></div>` : '<div class="empty">No time or activity.</div>'}</details>`).join("")}</div>`;
+  dayBars($("#time-chart"), d.days, d.target_hours);
 }
 
 /* ---------------------------------------------------------------- my tickets */
@@ -888,6 +973,8 @@ async function refresh() {
   if (CONF.team_enabled) { const st = await j("/api/team/stuck"); $("#c-team").textContent = st.items.length; $("#c-team").classList.toggle("hot", st.items.length > 0); }
   renderOverview(); renderMine(); renderBugs(); renderGitHub();
   if (view === "team") renderTeam();
+  if (view === "time") renderTime();
+  j("/api/timelog?days=1").then(t => { $("#c-time").textContent = `${t.days[0].logged_hours}h`; }).catch(() => {});
   if (view === "activity") renderActivity();
 }
 
@@ -898,9 +985,21 @@ function show(v) {
   if (v === "overview") renderOverview();
   if (v === "activity") renderActivity();
   if (v === "team") renderTeam();
+  if (v === "time") renderTime();
 }
 
 document.addEventListener("click", async ev => {
+  const lt = ev.target.closest("[data-logtime]");
+  if (lt) {
+    ev.stopPropagation();
+    const [key, day, tracked] = lt.dataset.logtime.split("|");
+    const mins = prompt(`Minutes to log on ${key} for ${day}:`, tracked ? Math.round(tracked * 60) : "60");
+    if (!mins) return;
+    const note = prompt("Worklog comment (optional):", "") || "";
+    const r = await j("/api/timelog/log", {method: "POST", body: JSON.stringify({key, minutes: +mins, day, comment: note})});
+    alert(r.ok ? `Logged ${r.minutes} min on ${r.key} in Jira.` : r.error);
+    return renderTime();
+  }
   if (ev.target.closest("[data-stop]") && !ev.target.closest("[data-open]")) return;
   const tab = ev.target.closest(".tab"); if (tab) return show(tab.dataset.view);
   const go = ev.target.closest("[data-goto]"); if (go) { ev.preventDefault(); return show(go.dataset.goto); }
@@ -913,6 +1012,7 @@ document.addEventListener("click", async ev => {
   if (ack) { await j(`/api/alerts/${ack.dataset.ack}/ack`, {method: "POST"}); renderActivity(); return refresh(); }
   const sb = ev.target.closest("#b-scope button");
   if (sb) { bScope = sb.dataset.v; document.querySelectorAll("#b-scope button").forEach(b => b.setAttribute("aria-pressed", b === sb)); return renderBugs(); }
+  const ts_ = ev.target.closest("#time-seg button"); if (ts_) { timeView = ts_.dataset.v; return renderTime(); }
   const tb = ev.target.closest("#team-seg button"); if (tb) { teamView = tb.dataset.v; store.set("bm-team", teamView); return renderTeam(); }
   const mb = ev.target.closest("#mine-seg button"); if (mb) { mineView = mb.dataset.v; store.set("bm-mine", mineView); return renderMine(); }
   const gb = ev.target.closest("#gh-seg button"); if (gb) { ghFilter = gb.dataset.v; return renderGitHub(); }

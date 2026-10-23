@@ -105,6 +105,15 @@ CREATE TABLE IF NOT EXISTS deployments (
     created TEXT, updated TEXT, url TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_deploy_sha ON deployments(sha);
+CREATE TABLE IF NOT EXISTS worklogs (
+    id TEXT PRIMARY KEY, key TEXT, author TEXT, author_id TEXT, started TEXT, seconds INTEGER,
+    comment TEXT, updated TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_worklogs_started ON worklogs(started);
+CREATE TABLE IF NOT EXISTS ticket_refs (    -- minimal info for tickets outside other scopes
+    key TEXT PRIMARY KEY, summary TEXT, status TEXT, status_category TEXT, issuetype TEXT,
+    project TEXT, priority TEXT, url TEXT
+);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, actor TEXT, action TEXT, detail TEXT
 );

@@ -27,6 +27,7 @@ TITLES = {
     "stuck": "Stuck",
     "escalation": "Escalation",
     "sync_failing": "Bug Monitor can't sync",
+    "timelog": "Time log",
     "review_requested": "Review requested",
     "checks_failed": "Checks failing",
     "pr_approved": "PR approved",

@@ -94,6 +94,27 @@ class JiraClient:
                              params={"maxResults": max_results, "orderBy": "-created"})
         return data.get("comments", [])
 
+    def worklogs(self, key: str, started_after_ms: int | None = None) -> list[dict]:
+        out, start = [], 0
+        while True:
+            params = {"startAt": start, "maxResults": 1000}
+            if started_after_ms:
+                params["startedAfter"] = started_after_ms
+            data = self._request("GET", f"/rest/api/3/issue/{key}/worklog", params=params)
+            vals = data.get("worklogs", [])
+            out += vals
+            start += len(vals)
+            if not vals or start >= data.get("total", 0):
+                return out
+
+    def add_worklog(self, key: str, seconds: int, started: str, comment: str = "") -> dict:
+        """Write access: only used when [timelog] allow_jira_write = true."""
+        body = {"timeSpentSeconds": int(seconds), "started": started}
+        if comment:
+            body["comment"] = {"type": "doc", "version": 1, "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": comment}]}]}
+        return self._request("POST", f"/rest/api/3/issue/{key}/worklog", json=body)
+
     def versions(self, project: str) -> list[dict]:
         return self._request("GET", f"/rest/api/3/project/{project}/versions")
 

@@ -71,6 +71,12 @@ def make_handler(settings: Settings):
                     return self._json(getattr(team, m.group(1))(conn, settings))
                 if u.path == "/api/config":
                     return self._json(_public_config(settings))
+                if u.path == "/api/timelog":
+                    from .timelog import timesheet
+                    return self._json(timesheet(conn, settings, int(q.get("days", 0)) or None, q.get("person")))
+                if u.path == "/api/timelog/team":
+                    from .timelog import team_time
+                    return self._json(team_time(conn, settings, int(q.get("days", 10))))
                 if u.path == "/api/mine":
                     return self._json(service.my_tickets(conn))
                 if u.path == "/api/issues":
@@ -103,10 +109,26 @@ def make_handler(settings: Settings):
             finally:
                 conn.close()
 
+        def _body(self) -> dict:
+            n = int(self.headers.get("Content-Length") or 0)
+            return json.loads(self.rfile.read(n) or b"{}") if n else {}
+
         def do_POST(self):
             u = urlparse(self.path)
+            # Only the dashboard itself may change things: browsers can't send this header
+            # cross-site without a CORS preflight, which this server never approves.
+            if self.headers.get("X-Bugmonitor") != "1":
+                return self._json({"error": "forbidden"}, 403)
             conn = connect(settings.db_path)
             try:
+                if u.path == "/api/timelog/log":
+                    from .jira_client import JiraClient
+                    from .timelog import log_to_jira
+                    b = self._body()
+                    j = settings.jira
+                    return self._json(log_to_jira(conn, settings, JiraClient(j.base_url, j.email, j.api_token),
+                                                  b.get("key", ""), float(b.get("minutes", 0)), b.get("day"),
+                                                  b.get("comment", "")))
                 if u.path == "/api/sync":
                     threading.Thread(target=_background_sync, args=(settings,), daemon=True).start()
                     return self._json({"started": True})

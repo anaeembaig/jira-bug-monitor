@@ -411,6 +411,11 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     else:
         conn.execute("UPDATE issues SET in_team=0")
     _refresh_versions(conn, client, settings, project_keys(base, team_jql))
+    try:
+        from .timelog import sync_worklogs
+        stats["worklogs"] = sync_worklogs(conn, settings, client, ctx.me_id)
+    except Exception as e:
+        log.warning("Worklog sync failed: %s", e)
 
     # ---- keep the store in scope (your own tickets are kept while they're yours)
     if scope_changed:

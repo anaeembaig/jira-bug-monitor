@@ -148,6 +148,30 @@ class Escalation:
 
 
 @dataclass
+class TimelogSettings:
+    enabled: bool = True
+    days: int = 14                   # how far back to show and sync worklogs
+    daily_target_hours: float = 8
+    workdays: list[str] = field(default_factory=lambda: ["Mon", "Tue", "Wed", "Thu", "Fri"])
+    reminder_time: str = "17:30"     # end-of-day reminder when you've logged less than the target ("" = off)
+    recap_in_digest: bool = True     # yesterday's hours in the morning digest
+    team: bool = True                # teammates' worklogs on team tickets (needs [team] jql)
+    allow_jira_write: bool = False   # let the dashboard and Claude log time to Jira for you
+
+
+@dataclass
+class DeploySettings:
+    enabled: bool = True             # needs [github] enabled
+    days: int = 30
+    # Map raw environment names to friendly ones, e.g. {"prod-us-east-1" = "Production"}
+    aliases: dict = field(default_factory=dict)
+    alert_my_tickets: bool = True    # your tickets reach an environment
+    alert_failures: bool = True      # a deploy that includes your tickets fails, or any production deploy fails
+    alert_rollbacks: bool = True
+    workflow_keywords: list[str] = field(default_factory=lambda: ["deploy", "release"])  # Actions runs to track
+
+
+@dataclass
 class DashboardSettings:
     host: str = "127.0.0.1"
     port: int = 8765
@@ -172,6 +196,8 @@ class Settings:
     notify: NotifySettings = field(default_factory=NotifySettings)
     routes: list[Route] = field(default_factory=list)
     escalations: list[Escalation] = field(default_factory=list)
+    timelog: TimelogSettings = field(default_factory=TimelogSettings)
+    deploy: DeploySettings = field(default_factory=DeploySettings)
     config_file: Path | None = None
     secret_sources: dict = field(default_factory=dict)  # name -> env | keychain | config | ""
 
@@ -252,6 +278,8 @@ def load_settings(path: str | os.PathLike | None = None, *, secrets: bool = True
     notify = _apply(NotifySettings(), raw.get("notify", {}))
     routes = [_apply(Route(), r) for r in raw.get("routes", [])]
     escalations = [_apply(Escalation(), e) for e in raw.get("escalations", [])]
+    timelog = _apply(TimelogSettings(), raw.get("timelog", {}))
+    deploy = _apply(DeploySettings(), raw.get("deployments", {}))
 
     jira.base_url = os.environ.get("JIRA_BASE_URL", jira.base_url).rstrip("/")
     jira.email = os.environ.get("JIRA_EMAIL", jira.email)
@@ -275,4 +303,4 @@ def load_settings(path: str | os.PathLike | None = None, *, secrets: bool = True
     priority_order = pr.get("order", list(DEFAULT_PRIORITY_ORDER))
     high = pr.get("high", list(DEFAULT_HIGH))
     return Settings(jira, alerts, dash, gh, db, priority_order, high, team, notify, routes,
-                    escalations, cfg_path, sources)
+                    escalations, timelog, deploy, cfg_path, sources)
