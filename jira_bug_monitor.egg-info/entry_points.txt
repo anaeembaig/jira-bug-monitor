@@ -1,0 +1,2 @@
+[console_scripts]
+bugmonitor = bugmonitor.__main__:_main_with_help

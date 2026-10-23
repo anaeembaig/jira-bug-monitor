@@ -254,7 +254,7 @@ def personal_digest(conn, settings: Settings) -> dict:
         if attention:
             sections += _section("Your PRs needing attention", [
                 _link(f"{p['repo'].split('/')[-1]}#{p['number']}",
-                      f"{p['status']}{f', {p['unresolved_threads']} unresolved' if p.get('unresolved_threads') else ''}", p["url"])
+                      p["status"] + (f", {p['unresolved_threads']} unresolved" if p.get("unresolved_threads") else ""), p["url"])
                 for p in attention[:5]])
     new = service.list_new(conn, 24)
     sections += _section(f"New bugs in the last 24 hours: {len(new)}",

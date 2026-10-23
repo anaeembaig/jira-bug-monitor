@@ -1,7 +1,7 @@
 name: tests
+# Runs only when started by hand (Actions tab > tests > Run workflow), so pushes don't send emails.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 jobs:
   test:
     strategy:

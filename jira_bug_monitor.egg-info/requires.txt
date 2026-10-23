@@ -1,0 +1,11 @@
+requests>=2.31
+mcp<2,>=1.12
+keyring>=24
+tomlkit>=0.12
+defusedxml>=0.7
+
+[:platform_system == "Windows"]
+plyer>=2.1
+
+[dev]
+pytest>=7
