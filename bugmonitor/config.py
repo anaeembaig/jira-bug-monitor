@@ -175,6 +175,14 @@ class DeploySettings:
 class DashboardSettings:
     host: str = "127.0.0.1"
     port: int = 8765
+    allow_network: bool = False      # must be true to listen on anything but this computer
+
+
+@dataclass
+class StorageSettings:
+    keep_alerts_days: int = 90
+    keep_audit_days: int = 365
+    keep_work_log_days: int = 365
 
 
 # Covers both Jira priority schemes (Highest..Lowest and Blocker..Trivial), most urgent first.
@@ -198,6 +206,7 @@ class Settings:
     escalations: list[Escalation] = field(default_factory=list)
     timelog: TimelogSettings = field(default_factory=TimelogSettings)
     deploy: DeploySettings = field(default_factory=DeploySettings)
+    storage: StorageSettings = field(default_factory=StorageSettings)
     config_file: Path | None = None
     secret_sources: dict = field(default_factory=dict)  # name -> env | keychain | config | ""
 
@@ -302,5 +311,6 @@ def load_settings(path: str | os.PathLike | None = None, *, secrets: bool = True
     pr = raw.get("priority", {})
     priority_order = pr.get("order", list(DEFAULT_PRIORITY_ORDER))
     high = pr.get("high", list(DEFAULT_HIGH))
+    stor = _apply(StorageSettings(), {k: v for k, v in storage.items() if k != "db_path"})
     return Settings(jira, alerts, dash, gh, db, priority_order, high, team, notify, routes,
-                    escalations, timelog, deploy, cfg_path, sources)
+                    escalations, timelog, deploy, stor, cfg_path, sources)

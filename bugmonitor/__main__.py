@@ -12,6 +12,7 @@
   doctor     Show version, running copies, and what holds the database
   notifications  Show your notifications; add --activate to turn them on, --preview to test Teams
   secrets    Show where each token is stored; add --move to move them into the credential store
+  audit      Show recent changes made from the dashboard or by Claude
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="bugmonitor", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["run", "sync", "check", "dashboard", "test-alert", "mcp", "install-claude", "doctor",
-                                        "notifications", "init", "secrets"])
+                                        "notifications", "init", "secrets", "audit"])
     p.add_argument("--config", help="Path to config.toml")
     p.add_argument("--no-browser", action="store_true", help="Don't open the dashboard on start")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -76,6 +77,14 @@ def main(argv=None) -> int:
     if not s.config_file or not s.config_file.exists():
         print(f"No settings found at {s.config_file}. Run `bugmonitor init` first.")
         return 1
+
+    if a.command == "audit":
+        conn = connect(s.db_path)
+        rows = conn.execute("SELECT ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT 50").fetchall()
+        for r in rows:
+            print(f"{r['ts']}  {r['actor']:16} {r['action']:14} {r['detail']}")
+        print("No changes recorded." if not rows else "")
+        return 0
 
     if a.command == "check":
         me = _client(s).myself()

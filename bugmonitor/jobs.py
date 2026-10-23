@@ -21,7 +21,8 @@ def run_all(conn, settings: Settings, alerter: Alerter | None = None, now: datet
                      ("escalations", lambda: escalations(conn, settings, alerter)),
                      ("stuck", lambda: stuck_reminders(conn, settings, alerter)),
                      ("digests", lambda: digests(conn, settings, alerter, now)),
-                     ("timelog", lambda: _timelog_reminder(conn, settings, alerter, now))):
+                     ("timelog", lambda: _timelog_reminder(conn, settings, alerter, now)),
+                     ("housekeeping", lambda: housekeeping(conn, settings))):
         try:
             out[name] = fn()
         except Exception as e:  # one failing job never blocks the others
@@ -212,3 +213,38 @@ def team_digest(conn, settings: Settings) -> dict:
     sections += _section(f"New bugs in the last 24 hours: {len(new)}",
                          [_link(x["key"], f"{x['summary']} ({x['priority'] or 'no priority'})", x["url"]) for x in new[:5]])
     return _card(f"{settings.team.name or 'Team'} daily summary ({datetime.now().strftime('%a %b %d')})", sections, settings)
+
+
+# --------------------------------------------------------------------------- housekeeping
+def housekeeping(conn, settings: Settings, force: bool = False) -> dict | None:
+    """Once a day: drop old alerts, audit entries, and work logs; tighten file permissions."""
+    import os
+    from datetime import timedelta
+    today = datetime.now().date().isoformat()
+    if not force and get_state(conn, "housekeeping") == today:
+        return None
+    st = settings.storage
+    now = datetime.now(timezone.utc)
+    cut = lambda d: (now - timedelta(days=d)).isoformat()
+    out = {
+        "alerts": conn.execute("DELETE FROM alerts WHERE ts < ? AND acknowledged=1", (cut(st.keep_alerts_days),)).rowcount,
+        "audit": conn.execute("DELETE FROM audit WHERE ts < ?", (cut(st.keep_audit_days),)).rowcount,
+        "work_log": conn.execute("DELETE FROM work_log WHERE ts < ?", (cut(st.keep_work_log_days),)).rowcount,
+        "outbox": conn.execute("DELETE FROM outbox WHERE ts < ?", (cut(7),)).rowcount,
+        "orphan_events": conn.execute("DELETE FROM events WHERE key NOT IN (SELECT key FROM issues)").rowcount,
+        "orphan_comments": conn.execute("DELETE FROM jira_comments WHERE key NOT IN (SELECT key FROM issues)").rowcount,
+    }
+    set_state(conn, "housekeeping", today)
+    conn.commit()
+    if os.name == "posix":   # settings and data are private to you
+        for p in [settings.config_file, settings.db_path, settings.db_path.with_name(settings.db_path.name + "-wal")]:
+            try:
+                if p and p.exists():
+                    os.chmod(p, 0o600)
+            except OSError:
+                pass
+        try:
+            os.chmod(settings.db_path.parent, 0o700)
+        except OSError:
+            pass
+    return out

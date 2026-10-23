@@ -99,6 +99,13 @@ def main() -> int:
     else:
         print("Database doesn't exist yet. Run ./start.sh first.")
 
+    from .vault import store_available
+    print(f"\nCredential store: {'available' if store_available() else 'not available (tokens stay in the settings file)'}")
+    for name, src in s.secret_sources.items():
+        if src == "config" and store_available():
+            print(f"[!] {name} is stored in the settings file. Run: bugmonitor secrets --move")
+    if s.dashboard.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[!] The dashboard listens on {s.dashboard.host} with no login.")
     print("\nAll good." if ok else "\nSee the [!] items above.")
     return 0 if ok else 1
 

@@ -38,8 +38,36 @@ def _public_config(settings: Settings) -> dict:
             "github_enabled": settings.github.enabled, "members": len(settings.team.members)}
 
 
+LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _host_ok(settings: Settings, host_header: str | None) -> bool:
+    """Block DNS rebinding: a web page can't reach this dashboard through a hostname it controls."""
+    host = (host_header or "").rsplit(":", 1)[0] if not (host_header or "").startswith("[") else (host_header or "").split("]")[0] + "]"
+    if host in LOOPBACK:
+        return True
+    return settings.dashboard.allow_network and host == settings.dashboard.host
+
+
 def make_handler(settings: Settings):
     class Handler(BaseHTTPRequestHandler):
+        def parse_request(self):
+            if not super().parse_request():
+                return False
+            if not _host_ok(settings, self.headers.get("Host")):
+                self.send_error(403, "Host not allowed")
+                return False
+            return True
+
+        def end_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+            super().end_headers()
+
         def log_message(self, fmt, *args):
             log.debug(fmt, *args)
 
@@ -72,6 +100,9 @@ def make_handler(settings: Settings):
                 if u.path == "/api/settings":
                     from .settings_api import public
                     return self._json(public(settings))
+                if u.path == "/api/audit":
+                    return self._json([dict(r) for r in conn.execute(
+                        "SELECT ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT 200")])
                 if u.path == "/api/config":
                     return self._json(_public_config(settings))
                 if u.path == "/api/insights":
@@ -175,6 +206,9 @@ def make_handler(settings: Settings):
 
 
 def serve(settings: Settings, stop_event=None) -> ThreadingHTTPServer:
+    if settings.dashboard.host not in LOOPBACK and not settings.dashboard.allow_network:
+        raise SystemExit(f"Refusing to serve the dashboard on {settings.dashboard.host}: it has no login. "
+                         "Use 127.0.0.1, or set allow_network = true under [dashboard] if you accept that risk.")
     httpd = ThreadingHTTPServer((settings.dashboard.host, settings.dashboard.port),
                                 make_handler(settings))
     log.info("Dashboard on http://%s:%s", settings.dashboard.host, settings.dashboard.port)
