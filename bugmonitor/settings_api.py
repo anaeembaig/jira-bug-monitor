@@ -29,6 +29,8 @@ EDITABLE = {
                 "require_environment": bool, "require_version": bool},
     "code_health": {"ci": bool, "alert_ci_failures": bool, "security": bool, "alert_security": bool,
                     "security_min_severity": str},
+    "jenkins": {"enabled": bool, "url": str, "user": str, "alert_failures": bool, "fetch_tests": bool, "days": int},
+    "reports": {"monthly": bool, "sprint_review": bool, "time": str},
 }
 SEVERITIES = ("low", "medium", "high", "critical")
 TIME_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
@@ -39,7 +41,8 @@ def public(settings: Settings) -> dict:
     """Everything the Settings tab shows. Webhook URLs and tokens are reduced to 'set' or 'not set'."""
     section = {"alerts": settings.alerts, "notify": settings.notify, "timelog": settings.timelog,
                "deployments": settings.deploy, "team": settings.team, "github": settings.github,
-               "sla": settings.sla, "quality": settings.quality, "code_health": settings.code}
+               "sla": settings.sla, "quality": settings.quality, "code_health": settings.code,
+               "jenkins": settings.jenkins, "reports": settings.reports}
     values = {s: {k: getattr(obj, k) for k in EDITABLE[s]} for s, obj in section.items()}
     return {
         "values": values,
@@ -84,7 +87,10 @@ def _validate(section: str, key: str, value):
         raise ValueError("Warn at must be between 0.1 and 1 (for example 0.8 = 80% of the time used)")
     if key == "security_min_severity" and value not in SEVERITIES:
         raise ValueError("Security severity must be low, medium, high, or critical")
-    if key in ("digest_time", "reminder_time", "standup_time") and value and not TIME_RE.match(value):
+    if section == "jenkins" and key == "url" and value and not re.match(r"^https://[^\s/]+(/[^\s]*)?$", value):
+        raise ValueError("Jenkins address must start with https:// (to use http, edit the settings file)")
+    if (key in ("digest_time", "reminder_time", "standup_time") or (section == "reports" and key == "time")) \
+            and value and not TIME_RE.match(value):
         raise ValueError(f"{key} must look like 09:30")
     if key == "quiet_hours" and value:
         parts = value.split("-")

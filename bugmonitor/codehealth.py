@@ -66,6 +66,12 @@ def sync_ci(conn, settings: Settings, client, alerter: Alerter | None = None, fo
                      (head.get("message") or "").split("\n")[0][:200], r.get("html_url"),
                      (end - start).total_seconds() if start and end and r.get("status") == "completed" else None))
                 stats["runs"] += 1
+        if default and hasattr(client, "branch_checks"):
+            try:
+                set_state(conn, f"branch_checks:{repo}", json.dumps(dict(client.branch_checks(repo, default), branch=default,
+                                                                         at=now_iso())))
+            except Exception as e:
+                log.debug("Checks on %s %s: %s", repo, default, e)
     conn.commit()
     # A default branch that just went red.
     for (repo, wf, branch) in conn.execute("SELECT DISTINCT repo, workflow, branch FROM ci_runs").fetchall():
@@ -88,7 +94,8 @@ def sync_ci(conn, settings: Settings, client, alerter: Alerter | None = None, fo
                             "ci_failed", f"{(r['sha'] or '')[:7]} {r['message'] or ''} by {r['commit_author'] or r['actor']}",
                             external=True, personal=broke_it, team=True)
         stats["alerts"] += 1
-    keep = (datetime.now(timezone.utc) - timedelta(days=c.ci_days + 1)).isoformat()
+    # Kept for 40 days so monthly reports cover a whole month; views show the last ci_days.
+    keep = (datetime.now(timezone.utc) - timedelta(days=max(c.ci_days + 1, 40))).isoformat()
     conn.execute("DELETE FROM ci_runs WHERE created < ?", (keep,))
     set_state(conn, "ci_first_done", get_state(conn, "ci_first_done") or now_iso())
     set_state(conn, "ci_last_sync", now_iso())
@@ -97,7 +104,8 @@ def sync_ci(conn, settings: Settings, client, alerter: Alerter | None = None, fo
 
 
 def ci_overview(conn, settings: Settings) -> dict:
-    runs = [row_to_dict(r) for r in conn.execute("SELECT * FROM ci_runs ORDER BY created")]
+    window = (datetime.now(timezone.utc) - timedelta(days=settings.code.ci_days)).isoformat()
+    runs = [row_to_dict(r) for r in conn.execute("SELECT * FROM ci_runs WHERE created >= ? ORDER BY created", (window,))]
     groups: dict = {}
     for r in runs:
         groups.setdefault((r["repo"], r["workflow"], r["branch"]), []).append(r)
@@ -140,8 +148,54 @@ def ci_overview(conn, settings: Settings) -> dict:
                  "message": r["message"], "who": r["commit_author"] or r["actor"], "url": r["url"], "created": r["created"]}
                 for r in reversed(runs) if r["conclusion"] in ("failure", "timed_out")][:20]
     judged = [r for r in runs if r["status"] == "completed" and r["conclusion"] in ("success", "failure", "timed_out")]
-    return {"enabled": settings.github.enabled and settings.code.ci, "last_sync": get_state(conn, "ci_last_sync"),
-            "runs": len(runs), "success_rate": round(sum(r["conclusion"] == "success" for r in judged) / len(judged) * 100)
+    for p in pipelines:
+        p["source"] = "github"
+    # Jenkins jobs on default branches, in the same shape.
+    jwin = (datetime.now(timezone.utc) - timedelta(days=settings.jenkins.days)).isoformat()
+    jk = [row_to_dict(r) for r in conn.execute("SELECT * FROM jenkins_builds WHERE is_deploy=0 AND started >= ? "
+                                               "ORDER BY started", (jwin,))]
+    jgroups: dict = {}
+    for r in jk:
+        if r["branch"] is None or r["branch"] in settings.code.ci_branches:
+            jgroups.setdefault(r["job"], []).append(r)
+    for job, rs in jgroups.items():
+        done = [r for r in rs if not r["building"] and r["result"] in ("SUCCESS", "FAILURE", "UNSTABLE")]
+        ok = [r for r in done if r["result"] == "SUCCESS"]
+        mins = [r["duration_s"] / 60 for r in ok if r["duration_s"]]
+        streak = 0
+        for r in reversed(done):
+            if r["result"] == "SUCCESS":
+                break
+            streak += 1
+        latest = rs[-1]
+        state = "in_progress" if latest["building"] else {"SUCCESS": "success", "FAILURE": "failure", "UNSTABLE": "unstable",
+                                                          "ABORTED": "cancelled"}.get(latest["result"] or "", "unknown")
+        pipelines.append({"repo": latest["repo"] or "Jenkins", "workflow": job, "branch": latest["branch"] or "—",
+                          "runs": len(rs), "state": state, "source": "jenkins",
+                          "failing": bool(done and done[-1]["result"] != "SUCCESS"), "failed_in_a_row": streak,
+                          "failing_since": None, "success_rate": round(len(ok) / len(done) * 100) if done else None,
+                          "median_minutes": round(statistics.median(mins), 1) if mins else None, "duration_trend": [],
+                          "url": latest["url"]})
+        for r in done:
+            judged.append({"conclusion": "success" if r["result"] == "SUCCESS" else "failure"})
+        failures += [{"repo": r["repo"] or "Jenkins", "workflow": job, "branch": r["branch"] or "—", "sha": (r["sha"] or "")[:7],
+                      "message": (r.get("changes") or [{}])[-1].get("msg") if r.get("changes") else f"#{r['number']}",
+                      "who": ", ".join(sorted({c.get("author") or "" for c in r.get("changes") or []})) or r["triggered_by"],
+                      "url": r["url"], "created": r["started"]} for r in done if r["result"] != "SUCCESS"]
+    pipelines.sort(key=lambda p: (not p["failing"], p["success_rate"] if p["success_rate"] is not None else 101))
+    failures = sorted(failures, key=lambda f: f["created"] or "", reverse=True)[:20]
+    checks = []
+    for (k, v) in conn.execute("SELECT k, v FROM sync_state WHERE k LIKE 'branch_checks:%'"):
+        try:
+            c = json.loads(v)
+        except ValueError:
+            continue
+        checks.append(dict(c, repo=k.split(":", 1)[1]))
+    return {"enabled": (settings.github.enabled and settings.code.ci) or settings.jenkins.enabled,
+            "jenkins": settings.jenkins.enabled, "last_sync": get_state(conn, "ci_last_sync"),
+            "branch_checks": checks, "jenkins_last_sync": get_state(conn, "jenkins_last_sync"),
+            "jenkins_error": get_state(conn, "jenkins_last_error") or None,
+            "runs": sum(p["runs"] for p in pipelines), "success_rate": round(sum(r["conclusion"] == "success" for r in judged) / len(judged) * 100)
             if judged else None,
             "failing_now": sum(1 for p in pipelines if p["failing"]), "pipelines": pipelines,
             "flaky": flaky[-20:][::-1],

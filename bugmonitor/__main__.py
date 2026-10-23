@@ -96,6 +96,10 @@ def main(argv=None) -> int:
             gh = GitHubClient(resolve_token(s.github.token))
             print(f"GitHub: connected as {gh.viewer()}"
                   + (f" (orgs: {', '.join(s.github.orgs)})" if s.github.orgs else ""))
+        if s.jenkins.enabled:
+            from .jenkins_client import JenkinsClient
+            jk = JenkinsClient(s.jenkins.url, s.jenkins.user, s.jenkins.token, s.jenkins.ca_bundle)
+            print(f"Jenkins: connected to {s.jenkins.url} as {jk.whoami() or s.jenkins.user}")
         return 0
 
     conn = connect(s.db_path)
@@ -105,6 +109,9 @@ def main(argv=None) -> int:
         print("Jira:", sync_once(conn, s, _client(s)))
         if s.github.enabled:
             print("GitHub:", sync_github_safe(conn, s))
+        if s.jenkins.enabled:
+            from .jenkins_sync import sync_jenkins_safe
+            print("Jenkins:", sync_jenkins_safe(conn, s, force=True))
         return 0
 
     if a.command == "test-alert":

@@ -108,6 +108,8 @@ def get_ticket(conn, key: str) -> dict:
         "WHERE jira_keys LIKE ?", (f'%"{key}"%',))]
     from .deployments import for_ticket
     issue["deployments"] = for_ticket(conn, key)
+    from .jenkins_sync import for_ticket as jenkins_for_ticket
+    issue["builds"] = jenkins_for_ticket(conn, key)
     issue["comments"] = [dict(r) for r in conn.execute(
         "SELECT author, created, body FROM jira_comments WHERE key=? ORDER BY created DESC LIMIT 20", (key,))]
     issue["alerts"] = [dict(r) for r in conn.execute(

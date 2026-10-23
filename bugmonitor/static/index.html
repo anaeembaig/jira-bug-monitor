@@ -361,7 +361,8 @@ pre.cmd{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-siz
   <!-- ================= INSIGHTS ================= -->
   <section class="view" id="v-insights">
     <div class="h-row"><h2>Insights</h2><div style="display:flex;gap:8px;align-items:center">
-      <div class="seg" id="ins-seg"><button data-v="metrics" aria-pressed="true">Metrics</button><button data-v="report" aria-pressed="false">Weekly report</button><button data-v="triage" aria-pressed="false">Triage</button></div>
+      <div class="seg" id="ins-seg"><button data-v="metrics" aria-pressed="true">Metrics</button><button data-v="report" aria-pressed="false">Weekly report</button>
+        <button data-v="monthly" aria-pressed="false">Monthly</button><button data-v="sprint" aria-pressed="false">Sprint review</button><button data-v="triage" aria-pressed="false">Triage</button></div>
       <select id="ins-days"><option value="14">14 days</option><option value="30" selected>30 days</option><option value="60">60 days</option></select></div></div>
     <div id="ins-body"></div>
   </section>
@@ -412,7 +413,8 @@ pre.cmd{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-siz
   <!-- ================= CODE HEALTH ================= -->
   <section class="view" id="v-code">
     <div class="h-row"><h2>Code Health</h2><div class="seg" id="code-seg">
-      <button data-v="ci">Builds</button><button data-v="security">Security</button><button data-v="reviewers">Reviewers</button></div></div>
+      <button data-v="ci">Builds</button><button data-v="jenkins">Jenkins</button><button data-v="tests">Tests</button>
+      <button data-v="security">Security</button><button data-v="reviewers">Reviewers</button></div></div>
     <div id="code-body"></div>
   </section>
 
@@ -437,6 +439,7 @@ pre.cmd{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-siz
 <script>
 /* ---------------------------------------------------------------- helpers */
 const $ = s => document.querySelector(s);
+const safeUrl = u => /^(https?:\/\/|mailto:)/i.test(String(u ?? "").trim()) ? String(u).trim() : "#";
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const PRI = ["blocker","highest","critical","high","major","medium","normal","low","minor","lowest","trivial"];
 const PRI_CLS = {blocker:"critical",highest:"critical",critical:"critical",high:"serious",major:"serious",
@@ -720,7 +723,7 @@ async function renderTeam() {
   } else if (teamView === "stuck") {
     body.innerHTML = `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Item</th><th class="nosort">Owner</th><th class="nosort">Status</th>
       <th class="nosort">Time stuck</th><th class="nosort">Limit</th><th class="nosort">Waiting on</th></tr></thead><tbody>
-      ${d.items.map(i => `<tr ${i.type === "ticket" ? `data-open="${esc(i.key)}"` : `data-href="${esc(i.url)}"`}>
+      ${d.items.map(i => `<tr ${i.type === "ticket" ? `data-open="${esc(i.key)}"` : `data-href="${esc(safeUrl(i.url))}"`}>
         <td class="wrap"><span class="chip">${i.type === "pr" ? "PR" : "Ticket"}</span> <span class="key">${esc(i.key)}</span> ${esc(i.title)}</td>
         <td>${esc(i.owner)}</td><td><span class="pill">${esc(i.status)}</span></td>
         <td class="num overdue">${days(i.days)}</td><td class="num muted">${days(i.limit_days)}</td>
@@ -736,6 +739,8 @@ const tiles = arr => `<div class="grid kpis">${arr.map(([l, v, h]) => `<div clas
 async function renderInsights() {
   document.querySelectorAll("#ins-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === insView));
   const body = $("#ins-body"), days = $("#ins-days").value;
+  $("#ins-days").style.display = ["monthly", "sprint"].includes(insView) ? "none" : "";
+  if (insView === "monthly" || insView === "sprint") return renderPeriodReport(body);
   if (insView === "report") {
     const r = await j(`/api/report/weekly?person=${encodeURIComponent(reportWho)}`);
     const who = [["", "Me"], ["team", "Team"], ...((await j("/api/settings")).members || []).map(m => [m.name, m.name])];
@@ -824,14 +829,19 @@ const LABELS = {
   code_health: {ci: "Track builds on default branches", alert_ci_failures: "Tell me when a build breaks", security: "Track security alerts",
     alert_security: "Tell me about new security alerts", security_min_severity: "Lowest severity to alert on"},
 };
+Object.assign(LABELS, {jenkins: {enabled: "Show Jenkins builds", url: "Jenkins address", user: "Your Jenkins user ID",
+    alert_failures: "Tell me when a default-branch job breaks", fetch_tests: "Read test reports (flaky tests)", days: "Days of builds to keep"},
+  reports: {monthly: "Monthly report to my Teams chat", sprint_review: "Sprint review to my Teams chat when a sprint closes", time: "Report time"}});
 Object.assign(LABELS.notify, {standup_time: "Standup note time", standup_team: "Post the team standup to digest channels"});
 const HELP = {quiet_hours: "e.g. 20:00-08:00. Held messages arrive as one summary afterward.", digest_time: "e.g. 09:30. Blank turns it off.",
   reminder_time: "e.g. 17:30. Sent when you've logged less than your target.", weekly_report_day: "e.g. Friday. Blank turns it off.",
   standup_time: "e.g. 09:15. Yesterday, today, and blockers in your Teams chat on workdays. Blank turns it off.",
   warn_at: "0.8 warns at 80% of the target. Set the hours per priority under [sla] in the settings file.",
   hours_per_point: "Used for tickets without a Jira estimate."};
+Object.assign(HELP, {url: "Add or change the API token with bugmonitor init, so it stays in your credential store.",
+  time: "e.g. 09:00. Monthly reports go out on the first workday of the month."});
 const SECTIONS = [["Your notifications", "alerts"], ["Pull requests", "github"], ["Deployments", "deployments"], ["Timing and summaries", "notify"],
-  ["Time log", "timelog"], ["Team", "team"], ["SLA targets", "sla"], ["Bug report checks", "quality"], ["Code health", "code_health"]];
+  ["Time log", "timelog"], ["Team", "team"], ["SLA targets", "sla"], ["Bug report checks", "quality"], ["Code health", "code_health"], ["Jenkins", "jenkins"], ["Reports", "reports"]];
 const DAYS7 = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function field(sec, key, v) {
@@ -967,7 +977,7 @@ async function renderDeploys() {
         ${r.description ? `<span class="muted">${esc(r.description)}</span>` : ""}</div>
         <div class="t2">${depBadge(r.state)} started by ${esc(r.creator || "?")} ${ago(r.created)} ago${p ? ` · step ${p.done} of ${p.total}${p.current ? `: ${esc(p.current)}` : ""}` : ""}</div>
         ${p ? `<div class="prog" style="margin-top:6px"><i style="width:${p.total ? p.done / p.total * 100 : 0}%;background:var(--bar)"></i></div>` : ""}</div>
-        ${r.url ? `<a href="${esc(r.url)}" target="_blank">Logs</a>` : ""}</div>`; }).join("")}</div></div></div>` : ""}
+        ${r.url ? `<a href="${esc(safeUrl(r.url))}" target="_blank">Logs</a>` : ""}</div>`; }).join("")}</div></div></div>` : ""}
     <div class="card"><div class="card-h"><h3>Environments</h3><span class="sub">latest deploy to each</span></div>
       <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Environment</th><th class="nosort">Repo</th><th class="nosort">State</th>
         <th class="nosort">Version</th><th class="nosort">Deployed by</th><th class="nosort">When</th><th class="nosort">Took</th><th class="nosort">Tickets</th></tr></thead><tbody>
@@ -977,6 +987,7 @@ async function renderDeploys() {
         <td class="muted">${ago(e.created)} ago</td><td class="num muted">${dur(e.duration_s)}</td>
         <td><div class="chips">${(e.tickets || []).slice(0, 6).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}${(e.tickets || []).length > 6 ? `<span class="chip">+${e.tickets.length - 6}</span>` : ""}</div></td></tr>`).join("")
         || '<tr><td colspan="8" class="empty">No deployments found in your repos.</td></tr>'}</tbody></table></div></div>
+    <div id="dep-notes"></div>
     <div class="card mt"><div class="card-h"><h3>Recent deployments</h3><span class="sub">${feed.length} shown</span></div>
       <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">When</th><th class="nosort">Environment</th><th class="nosort">State</th>
         <th class="nosort">By</th><th class="nosort">Shipped</th><th class="nosort">Took</th><th class="nosort"></th></tr></thead><tbody>
@@ -987,8 +998,9 @@ async function renderDeploys() {
           : d.commits == null ? '<span class="muted">First deploy tracked</span>' : d.commits === 0 ? '<span class="muted">Same version redeployed</span>'
           : `${d.commits} commit${d.commits === 1 ? "" : "s"}`}
           <div class="chips" style="margin-top:4px">${(d.tickets || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop ${d.mine && d.mine.includes(k) ? 'style="border-color:var(--accent)"' : ""}>${esc(k)}</a>`).join("")}</div></td>
-        <td class="num muted">${dur(d.duration_s)}</td><td>${d.log_url ? `<a href="${esc(d.log_url)}" target="_blank" data-stop>Logs</a>` : ""}</td></tr>`).join("")
+        <td class="num muted">${dur(d.duration_s)}</td><td>${d.log_url ? `<a href="${esc(safeUrl(d.log_url))}" target="_blank" data-stop>Logs</a>` : ""}</td></tr>`).join("")
         || '<tr><td colspan="7" class="empty">Nothing here.</td></tr>'}</tbody></table></div></div>`;
+  renderAutoNotes();
 }
 
 function openDeploy(id) {
@@ -1004,7 +1016,7 @@ function openDeploy(id) {
         <span class="k">Ref</span><span>${esc(d.ref || "—")}</span>
         <span class="k">Previous version</span><span class="path">${esc((d.previous_sha || "none tracked").slice(0, 12))}</span>
         <span class="k">Commits</span><span>${d.commits ?? "—"} by ${esc((d.authors || []).join(", ") || "—")}</span>
-        <span class="k">Links</span><span>${d.log_url ? `<a href="${esc(d.log_url)}" target="_blank">Logs</a> ` : ""}${d.environment_url ? `<a href="${esc(d.environment_url)}" target="_blank">Open environment</a> ` : ""}<a href="${esc(d.url)}" target="_blank">GitHub</a></span></div>
+        <span class="k">Links</span><span>${d.log_url ? `<a href="${esc(safeUrl(d.log_url))}" target="_blank">Logs</a> ` : ""}${d.environment_url ? `<a href="${esc(safeUrl(d.environment_url))}" target="_blank">Open environment</a> ` : ""}<a href="${esc(safeUrl(d.url))}" target="_blank">GitHub</a></span></div>
       ${d.rollback ? `<div class="est">${stBadge("serious", "Rollback")} This deploy went back to an older version than what was there before.</div>` : ""}
       <div class="sect"><h4>Progress</h4><div class="tl">${(d.statuses || []).map(st => `<div><div class="when">${esc(new Date(st.at).toLocaleString())}${st.by ? " · " + esc(st.by) : ""}</div>
         <div>${depBadge(st.state)} ${esc(st.description || "")}</div></div>`).join("") || '<div class="muted">No status updates.</div>'}</div></div>
@@ -1075,7 +1087,7 @@ async function renderTime() {
         <span class="sub" style="margin-left:auto">${x.tickets.length} ticket${x.tickets.length === 1 ? "" : "s"}</span></summary>
       ${x.tickets.length ? `<div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Ticket</th><th class="nosort">Status</th>
         <th class="nosort">Logged</th><th class="nosort">Tracked</th><th class="nosort">What you did</th>${d.can_write ? '<th class="nosort"></th>' : ""}</tr></thead><tbody>
-        ${x.tickets.map(t => `<tr data-open="${esc(t.key)}"><td class="wrap"><a class="key" href="${esc(t.url || "#")}" target="_blank" data-stop>${esc(t.key)}</a> ${esc(t.summary || "")}
+        ${x.tickets.map(t => `<tr data-open="${esc(t.key)}"><td class="wrap"><a class="key" href="${esc(safeUrl(t.url || "#"))}" target="_blank" data-stop>${esc(t.key)}</a> ${esc(t.summary || "")}
             ${t.comments.length ? `<div class="sub">${esc(t.comments.join(" · "))}</div>` : ""}</td>
           <td>${t.status ? `<span class="pill">${esc(t.status)}</span>` : ""}</td>
           <td class="num ${!t.logged_hours ? "muted" : ""}">${t.logged_hours ? t.logged_hours + "h" : "—"}</td>
@@ -1114,7 +1126,7 @@ function renderMine() {
       ${cols.map(c => `<th class="nosort" title="Time spent in ${esc(c)}">${esc(c)}</th>`).join("")}
       <th class="nosort">Total</th><th class="nosort">Logged</th><th class="nosort">PR</th></tr></thead><tbody>
     ${tickets.map(t => `<tr data-open="${esc(t.key)}">
-      <td><a class="key" href="${esc(t.url)}" target="_blank" data-stop>${esc(t.key)}</a></td>
+      <td><a class="key" href="${esc(safeUrl(t.url))}" target="_blank" data-stop>${esc(t.key)}</a></td>
       <td><span class="chip">${esc(t.issuetype || "")}</span></td>
       <td>${priBadge(t.priority)}</td>
       <td class="wrap">${esc(t.summary)}</td>
@@ -1123,7 +1135,7 @@ function renderMine() {
       ${cols.map(c => `<td class="num ${t.status === c ? "" : "muted"}">${t.hours_by_status[c] != null ? hrs(t.hours_by_status[c]) : "—"}</td>`).join("")}
       <td class="num"><b>${hrs(t.total_hours)}</b></td>
       <td class="num muted">${t.work_minutes ? hrs(t.work_minutes / 60) : "—"}</td>
-      <td>${(t.prs || []).map(p => `<a href="${esc(p.url)}" target="_blank" data-stop>#${p.number}</a> ${prBadge(p.status)}`).join("<br>") || '<span class="muted">—</span>'}</td>
+      <td>${(t.prs || []).map(p => `<a href="${esc(safeUrl(p.url))}" target="_blank" data-stop>#${p.number}</a> ${prBadge(p.status)}`).join("<br>") || '<span class="muted">—</span>'}</td>
     </tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -1131,13 +1143,13 @@ function mineCard(t) {
   const steps = Object.entries(t.hours_by_status).map(([k, v]) => `<span class="pill" title="Time in ${esc(k)}">${esc(k)} <b class="num">${hrs(v)}</b></span>`).join("");
   return `<div class="tcard" data-open="${esc(t.key)}">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-      <a class="key" href="${esc(t.url)}" target="_blank" data-stop>${esc(t.key)}</a><span class="chip">${esc(t.issuetype || "")}</span></div>
+      <a class="key" href="${esc(safeUrl(t.url))}" target="_blank" data-stop>${esc(t.key)}</a><span class="chip">${esc(t.issuetype || "")}</span></div>
     <div class="sum">${esc(t.summary)}</div>
     <div class="sm"><span>${priBadge(t.priority)}</span>
       ${t.status_category === "done" ? `<span>Resolved ${ago(t.resolved || t.updated)} ago</span>` : `<span title="Time in the current status">In status ${hrs(t.in_status_hours)}</span>`}
       <span title="Created to now, or to resolution">Total ${hrs(t.total_hours)}</span></div>
     <div class="times">${steps}</div>
-    ${(t.prs || []).length ? `<div>${t.prs.map(p => `<a href="${esc(p.url)}" target="_blank" data-stop>#${p.number}</a> ${prBadge(p.status)}`).join(" ")}</div>` : ""}
+    ${(t.prs || []).length ? `<div>${t.prs.map(p => `<a href="${esc(safeUrl(p.url))}" target="_blank" data-stop>#${p.number}</a> ${prBadge(p.status)}`).join(" ")}</div>` : ""}
   </div>`;
 }
 
@@ -1164,14 +1176,14 @@ function renderBugs() {
   $("#b-rows").innerHTML = rows.map(i => `
     <tr data-open="${esc(i.key)}">
       <td><div class="urg"><span class="t"><i style="width:${i.urgency}%"></i></span><span class="num">${Math.round(i.urgency)}</span></div></td>
-      <td><a class="key" href="${esc(i.url)}" target="_blank" data-stop>${esc(i.key)}</a></td>
+      <td><a class="key" href="${esc(safeUrl(i.url))}" target="_blank" data-stop>${esc(i.key)}</a></td>
       <td>${priBadge(i.priority)}</td>
       <td><span class="pill">${esc(i.status)}</span></td>
       <td class="wrap">${esc(i.summary)}${i.reopen_count ? ` <span class="chip">reopened ×${i.reopen_count}</span>` : ""}</td>
       <td>${i.assignee ? esc(i.assignee) : '<span class="muted">Unassigned</span>'}</td>
       <td class="muted num">${ago(i.created)}</td>
       <td class="sla-col">${slaBadge(i.sla)}</td>
-      <td>${(i.prs || []).map(p => `<a href="${esc(p.url)}" target="_blank" data-stop title="${esc(p.status)}">#${p.number}</a> ${prBadge(p.status)}`).join("<br>") || '<span class="muted">—</span>'}</td>
+      <td>${(i.prs || []).map(p => `<a href="${esc(safeUrl(p.url))}" target="_blank" data-stop title="${esc(p.status)}">#${p.number}</a> ${prBadge(p.status)}`).join("<br>") || '<span class="muted">—</span>'}</td>
     </tr>`).join("") || `<tr><td colspan="9" class="empty">No bugs match these filters.</td></tr>`;
   document.querySelectorAll("#v-bugs .sla-col").forEach(c => c.style.display = CONF.sla_enabled ? "" : "none");
 }
@@ -1228,11 +1240,11 @@ orgs = ["tcp-software"]      # only PRs in these orgs</pre>
       <div class="card-h"><h3>Your branches</h3><span class="sub">last commit by you in the last 60 days</span></div>
       <div class="tw" style="max-height:none"><table><thead><tr>
         <th class="nosort">Branch</th><th class="nosort">Last commit</th><th class="nosort">Checks</th><th class="nosort">Pull request</th><th class="nosort">Jira</th><th class="nosort">Updated</th></tr></thead><tbody>
-        ${GH.branches.map(b => `<tr data-href="${esc(b.url)}">
+        ${GH.branches.map(b => `<tr data-href="${esc(safeUrl(b.url))}">
           <td><span class="muted">${esc(b.repo.split("/")[1])}/</span><b>${esc(b.name)}</b></td>
           <td class="wrap muted">${esc(b.message || "")} <span class="num">${esc(b.sha || "")}</span></td>
           <td>${checkBadge(b.checks)}</td>
-          <td>${b.pr_number ? `<a href="${esc(b.pr_url)}" target="_blank" data-stop>#${b.pr_number}</a> <span class="muted">${esc((b.pr_state || "").toLowerCase())}</span>` : '<span class="muted">No PR</span>'}</td>
+          <td>${b.pr_number ? `<a href="${esc(safeUrl(b.pr_url))}" target="_blank" data-stop>#${b.pr_number}</a> <span class="muted">${esc((b.pr_state || "").toLowerCase())}</span>` : '<span class="muted">No PR</span>'}</td>
           <td><div class="chips">${(b.jira_keys || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}</div></td>
           <td class="muted num">${ago(b.committed)}</td></tr>`).join("") || '<tr><td colspan="6" class="empty">No recent branches.</td></tr>'}
       </tbody></table></div>
@@ -1268,7 +1280,7 @@ async function openTicket(key) {
     const e = t.estimate || {};
     const byStatus = Object.entries(t.hours_by_status || {}).map(([k, v]) => `<span class="pill">${esc(k)} <b class="num">${hrs(v)}</b></span>`).join(" ");
     d.innerHTML = `
-      <div class="dr-h"><div style="flex:1;min-width:0"><a class="key" href="${esc(t.url)}" target="_blank">${esc(t.key)}</a>
+      <div class="dr-h"><div style="flex:1;min-width:0"><a class="key" href="${esc(safeUrl(t.url))}" target="_blank">${esc(t.key)}</a>
         <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(t.summary)}</div></div>
         <button class="btn" data-close aria-label="Close">Close</button></div>
       <div class="dr-b">
@@ -1293,11 +1305,13 @@ async function openTicket(key) {
             <div class="t1">${esc(p.repo)}#${p.number}</div>
             <div class="t2">${p.approvals ? `${p.approvals} approval${p.approvals === 1 ? "" : "s"}` : "not reviewed yet"}${p.pending && p.pending.length ? ` · waiting on ${esc(p.pending.join(", "))}` : ""}
               · ${p.comments} comment${p.comments === 1 ? "" : "s"}${p.unresolved ? `, ${p.unresolved} unresolved` : ""}</div></div>${prBadge(p.status)}</div>`).join("")}
-          ${(t.branches || []).map(b => `<div class="li"><div class="grow"><a href="${esc(b.url)}" target="_blank">${esc(b.name)}</a> <span class="muted">${esc(b.repo)}</span></div>${checkBadge(b.checks)}</div>`).join("")}
+          ${(t.branches || []).map(b => `<div class="li"><div class="grow"><a href="${esc(safeUrl(b.url))}" target="_blank">${esc(b.name)}</a> <span class="muted">${esc(b.repo)}</span></div>${checkBadge(b.checks)}</div>`).join("")}
           ${!(t.prs || []).length && !(t.branches || []).length ? '<div class="muted">None linked. Put the ticket key in the branch name or PR title.</div>' : ""}</div>
         <div class="sect"><h4>Deployments</h4>${(t.deployments || []).map(d => `<div class="li"><div class="grow"><b>${esc(d.environment)}</b>
           <span class="muted">${esc(d.repo.split("/")[1])}@${esc((d.sha || "").slice(0, 7))} by ${esc(d.creator || "?")}, ${ago(d.created)} ago</span></div>${depBadge(d.state, d.rollback)}</div>`).join("")
           || '<div class="muted">Not deployed anywhere yet (or no Jira key in the shipped commits).</div>'}</div>
+        ${(t.builds || []).length ? `<div class="sect"><h4>Jenkins builds</h4>${t.builds.map(b => `<div class="li"><div class="grow"><a href="${esc(safeUrl(b.url))}" target="_blank">${esc(b.job)} #${b.number}</a>
+          <span class="muted">${esc(b.branch || "")} · ${esc(b.triggered_by || "")} · ${ago(b.started)} ago</span></div>${jkBadge(b)}</div>`).join("")}</div>` : ""}
         ${(t.comments || []).length ? `<div class="sect"><h4>Recent Jira comments</h4><div class="convo">${t.comments.map(c => `<div class="cm"><div class="cm-h"><b>${esc(c.author || "")}</b><span>${ago(c.created)} ago</span></div><div class="cm-b">${esc(c.body)}</div></div>`).join("")}</div></div>` : ""}
         <div class="sect"><h4>Timeline</h4><div class="tl">${(t.timeline || []).slice().reverse().map(ev => `<div>
           <div class="when">${esc(new Date(ev.ts).toLocaleString())} ${ev.author ? "· " + esc(ev.author) : ""}</div>
@@ -1320,11 +1334,11 @@ async function openPR(repo, number) {
       return `<div class="cm ${c.kind === "thread" && !c.resolved ? "open-thread" : ""}">
         <div class="cm-h"><b>${esc(c.author)}</b><span>${esc(label)}</span>
           ${c.path ? `<span class="path">${esc(c.path)}${c.line ? ":" + c.line : ""}</span>` : ""}
-          <span>${ago(c.at)} ago</span><a href="${esc(c.url)}" target="_blank" style="margin-left:auto">View</a></div>
+          <span>${ago(c.at)} ago</span><a href="${esc(safeUrl(c.url))}" target="_blank" style="margin-left:auto">View</a></div>
         ${c.body ? `<div class="cm-b">${esc(c.body)}</div>` : ""}</div>`;
     };
     d.innerHTML = `
-      <div class="dr-h"><div style="flex:1;min-width:0"><a class="key" href="${esc(p.url)}" target="_blank">${esc(p.repo)}#${p.number}</a>
+      <div class="dr-h"><div style="flex:1;min-width:0"><a class="key" href="${esc(safeUrl(p.url))}" target="_blank">${esc(p.repo)}#${p.number}</a>
         <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(p.title)}</div></div>
         <button class="btn" data-close>Close</button></div>
       <div class="dr-b">
@@ -1347,7 +1361,7 @@ async function openPR(repo, number) {
         <div class="sect"><h4>Reviewers</h4>${(det.reviewers || []).map(r => { const [c, l] = rvState(r); return `<div class="li"><div class="grow"><b>${esc(r.login.replace("team:", "@"))}</b></div>
           <span class="st ${c}">${ICON[c]}${l}</span><span class="muted" style="width:70px;text-align:right">${r.at ? ago(r.at) + " ago" : ""}</span></div>`; }).join("")
           || '<div class="muted">No reviewers requested.</div>'}</div>
-        <div class="sect"><h4>Checks</h4>${(det.checks || []).map(c => `<div class="li"><div class="grow">${c.url ? `<a href="${esc(c.url)}" target="_blank">${esc(c.name)}</a>` : esc(c.name)}</div>${checkBadge(c.state)}</div>`).join("")
+        <div class="sect"><h4>Checks</h4>${(det.checks || []).map(c => `<div class="li"><div class="grow">${c.url ? `<a href="${esc(safeUrl(c.url))}" target="_blank">${esc(c.name)}</a>` : esc(c.name)}</div>${checkBadge(c.state)}</div>`).join("")
           || '<div class="muted">No checks reported.</div>'}</div>
         <div class="sect"><h4>Conversation · ${p.comments_count || 0} comments${openThreads.length ? `, ${openThreads.length} unresolved` : ""}</h4>
           <div class="convo">${[...openThreads, ...rest].map(cm).join("") || '<div class="muted">No comments yet.</div>'}</div></div>
@@ -1372,7 +1386,7 @@ const slaStage = (name, x) => x ? `<span class="k">${name}</span><span>${stBadge
 async function copyText(txt, btn) {
   try { await navigator.clipboard.writeText(txt); if (btn) btn.textContent = "Copied"; } catch { if (btn) btn.textContent = "Select the text to copy"; }
 }
-const keyLink = (k, url) => /^[A-Z][A-Z0-9_]+-\d+$/.test(k) ? `<a class="key" href="#" data-open="${esc(k)}">${esc(k)}</a>` : (url ? `<a class="key" href="${esc(url)}" target="_blank">${esc(k)}</a>` : `<span class="key">${esc(k)}</span>`);
+const keyLink = (k, url) => /^[A-Z][A-Z0-9_]+-\d+$/.test(k) ? `<a class="key" href="#" data-open="${esc(k)}">${esc(k)}</a>` : (url ? `<a class="key" href="${esc(safeUrl(url))}" target="_blank">${esc(k)}</a>` : `<span class="key">${esc(k)}</span>`);
 const liItem = x => `<div class="li"><div class="grow"><div class="t1">${keyLink(x.key, x.url)} ${esc(x.summary || "")}</div>${x.detail ? `<div class="t2">${esc(x.detail)}</div>` : ""}</div></div>`;
 const emptyBox = t => `<div class="empty">${t}</div>`;
 let qView = store.get("bm-q") || "reports", codeView = store.get("bm-code") || "ci", STANDUP = null;
@@ -1471,23 +1485,30 @@ const SEV_CLS = {critical: "critical", high: "serious", medium: "warning", low: 
 async function renderCode() {
   document.querySelectorAll("#code-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === codeView));
   const body = $("#code-body");
-  if (!CONF.github_enabled) { body.innerHTML = '<div class="banner">Code health comes from GitHub. Turn on GitHub in <code>bugmonitor init</code>.</div>'; return; }
+  if (codeView === "jenkins") return renderJenkins(body);
+  if (codeView === "tests") return renderTests(body);
+  if (!CONF.github_enabled && codeView !== "ci") { body.innerHTML = '<div class="banner">This comes from GitHub. Turn on GitHub in <code>bugmonitor init</code>.</div>'; return; }
   if (codeView === "ci") {
     const d = await j("/api/ci");
-    if (!d.enabled) { body.innerHTML = '<div class="banner">Build tracking is off. Turn it on in Settings under Code health.</div>'; return; }
+    if (!d.enabled) { body.innerHTML = '<div class="banner">Build tracking is off. Turn on GitHub or Jenkins in <code>bugmonitor init</code>, and builds in Settings under Code health.</div>'; return; }
     body.innerHTML = tiles([["Failing now", d.failing_now, "default-branch pipelines"], ["Success rate", d.success_rate == null ? "—" : d.success_rate + "%", "finished runs"],
-        ["Runs", d.runs, "last 2 weeks"], ["Passed on retry", d.flaky.length, "possible flaky tests"]]) + `
+        ["Runs", d.runs, "last 2 weeks"], ["Runs passed on retry", d.flaky.length, "see Tests for the flaky tests"]]) + `
       <div class="card"><div class="card-h"><h3>Pipelines</h3><span class="sub">${d.last_sync ? "checked " + ago(d.last_sync) + " ago" : "waiting for first check"}</span></div>
         <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Workflow</th><th class="nosort">Branch</th><th class="nosort">State</th>
           <th class="nosort">Success rate</th><th class="nosort">Median time</th><th class="nosort">Runs</th></tr></thead><tbody>
-        ${d.pipelines.map(p => `<tr data-href="${esc(p.url || "")}"><td><b>${esc(p.workflow)}</b> <span class="muted">${esc(p.repo.split("/")[1])}</span></td><td><span class="path">${esc(p.branch)}</span></td>
+        ${d.pipelines.map(p => `<tr data-href="${esc(safeUrl(p.url || ""))}"><td><span class="chip">${p.source === "jenkins" ? "Jenkins" : "Actions"}</span> <b>${esc(p.workflow)}</b> <span class="muted">${esc((p.repo || "").split("/").pop())}</span></td><td><span class="path">${esc(p.branch)}</span></td>
           <td>${stBadge(...(CI_CLS[p.state] || ["neutral", p.state || "?"]))}${p.failed_in_a_row > 1 ? `<div class="sub">${p.failed_in_a_row} failures in a row</div>` : ""}</td>
           <td class="num">${p.success_rate == null ? "—" : p.success_rate + "%"}</td><td class="num">${p.median_minutes == null ? "—" : p.median_minutes + " min"}</td><td class="num">${p.runs}</td></tr>`).join("")
-          || '<tr><td colspan="6" class="empty">No GitHub Actions runs on default branches yet.</td></tr>'}</tbody></table></div></div>
+          || '<tr><td colspan="6" class="empty">No builds on default branches yet.</td></tr>'}</tbody></table></div></div>
+      ${d.jenkins_error ? `<div class="banner mt">Jenkins: ${esc(d.jenkins_error)}</div>` : ""}
+      ${d.branch_checks.length ? `<div class="card mt"><div class="card-h"><h3>Checks on default branches</h3><span class="sub">latest commit</span></div><div class="card-b"><div class="list">
+        ${d.branch_checks.map(b => `<div class="li"><div class="grow"><div class="t1"><b>${esc(b.repo.split("/")[1] || b.repo)}</b> <span class="path">${esc(b.branch || "")}</span> <span class="path">${esc((b.sha || "").slice(0, 7))}</span></div>
+          <div class="chips" style="margin-top:4px">${(b.checks || []).map(c => `<a class="chip" href="${esc(safeUrl(c.url || "#"))}" target="_blank" title="${esc(c.app || "")}">${esc(c.name)}: ${esc(c.state || "?")}</a>`).join("") || '<span class="muted">No checks reported</span>'}</div></div>
+          ${(b.checks || []).some(c => ["failure", "error", "timed_out"].includes(c.state)) ? stBadge("critical", "Failing") : (b.checks || []).some(c => ["pending", "in_progress", "queued"].includes(c.state)) ? stBadge("warning", "Running") : stBadge("good", "Passing")}</div>`).join("")}</div></div></div>` : ""}
       <div class="grid two mt"><div class="card"><div class="card-h"><h3>Recent failures</h3></div><div class="card-b"><div class="list">
-        ${d.recent_failures.map(f => `<div class="li"><div class="grow"><div class="t1"><a href="${esc(f.url)}" target="_blank">${esc(f.workflow)}</a> <span class="muted">${esc(f.repo.split("/")[1])} · ${esc(f.branch)}</span></div>
+        ${d.recent_failures.map(f => `<div class="li"><div class="grow"><div class="t1"><a href="${esc(safeUrl(f.url))}" target="_blank">${esc(f.workflow)}</a> <span class="muted">${esc(f.repo.split("/")[1])} · ${esc(f.branch)}</span></div>
           <div class="t2"><span class="path">${esc(f.sha)}</span> ${esc(f.message || "")} · ${esc(f.who || "")} · ${ago(f.created)} ago</div></div></div>`).join("") || emptyBox("No failures.")}</div></div></div>
-        <div class="card"><div class="card-h"><h3>Passed on retry</h3><span class="sub">same commit failed, then passed</span></div><div class="card-b"><div class="list">
+        <div class="card"><div class="card-h"><h3>Runs that passed on retry</h3><span class="sub">same commit failed, then passed</span></div><div class="card-b"><div class="list">
         ${d.flaky_by_workflow.map(f => `<div class="li"><div class="grow"><div class="t1">${esc(f.workflow)} <span class="muted">${esc(f.repo.split("/")[1])}</span></div></div><b class="num">${f.retries}×</b></div>`).join("") || emptyBox("No retries needed.")}</div></div></div></div>`;
   } else if (codeView === "security") {
     const d = await j("/api/security");
@@ -1496,7 +1517,7 @@ async function renderCode() {
         ["Low", d.by_severity.low, ""], ["High or critical with no ticket", d.untracked, "not linked to Jira"]]) + `
       <div class="card"><div class="card-h"><h3>Open alerts</h3><span class="sub">Dependabot and code scanning${d.last_sync ? " · checked " + ago(d.last_sync) + " ago" : ""}</span></div>
         <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Severity</th><th class="nosort">Alert</th><th class="nosort">Repo</th><th class="nosort">Age</th><th class="nosort">Jira</th></tr></thead><tbody>
-        ${d.items.map(a => `<tr data-href="${esc(a.url || "")}"><td>${stBadge(SEV_CLS[a.severity] || "neutral", a.severity)}</td>
+        ${d.items.map(a => `<tr data-href="${esc(safeUrl(a.url || ""))}"><td>${stBadge(SEV_CLS[a.severity] || "neutral", a.severity)}</td>
           <td class="wrap"><b>${esc(a.package || "")}</b> ${esc(a.summary || "")}<div class="sub">${a.kind === "dependabot" ? "Dependency" : "Code scanning"}${a.cve ? " · " + esc(a.cve) : ""}</div></td>
           <td class="muted">${esc(a.repo.split("/")[1])}</td><td class="num muted">${a.age_days != null ? days(a.age_days) : "—"}</td>
           <td><div class="chips">${(a.jira_keys || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}</div></td></tr>`).join("")
@@ -1583,7 +1604,7 @@ async function ticketExtras(key) {
         <div class="t2">${esc(s.author || "")} · ${esc(s.reasons.join(" · "))}</div></div></div>`).join("")}</div>` : ""}
     ${x.similar.length ? `<div class="sect"><h4>Similar finished tickets</h4>${x.similar.map(s => `<div class="li"><div class="grow">
       <div class="t1">${keyLink(s.key, s.url)} ${esc(s.summary)}</div>
-      <div class="t2">${s.active_hours ? hrs(s.active_hours) + " hands-on · " : ""}${esc(s.assignee || "")}${s.prs.length ? " · fixed in " + s.prs.map(p => `<a href="${esc(p.url)}" target="_blank">#${p.number}</a>`).join(", ") : ""}</div></div>
+      <div class="t2">${s.active_hours ? hrs(s.active_hours) + " hands-on · " : ""}${esc(s.assignee || "")}${s.prs.length ? " · fixed in " + s.prs.map(p => `<a href="${esc(safeUrl(p.url))}" target="_blank">#${p.number}</a>`).join(", ") : ""}</div></div>
       <span class="sub num">${Math.round(s.similarity * 100)}% match</span></div>`).join("")}</div>` : ""}
     <div id="t-start"></div>`;
 }
@@ -1617,6 +1638,95 @@ async function runSearch(q) {
   panel.classList.add("on");
 }
 function closeSearch() { $("#gs-panel").classList.remove("on"); $("#gsearch").classList.remove("open"); }
+
+/* ---------------------------------------------------------------- v1.2: Jenkins, tests, release notes, reports */
+const JK = {SUCCESS: ["good", "Passed"], FAILURE: ["critical", "Failed"], UNSTABLE: ["serious", "Tests failing"], ABORTED: ["neutral", "Aborted"],
+  NOT_BUILT: ["neutral", "Not built"]};
+const jkBadge = b => b.building ? stBadge("warning", "Running") : stBadge(...(JK[b.result] || ["neutral", (b.result || "?").toLowerCase()]));
+let REPORT = null;
+
+async function renderJenkins(body) {
+  if (!CONF.jenkins_enabled) { body.innerHTML = `<div class="banner"><strong>Connect Jenkins</strong> to see builds, stages, who started them, test results, and deploy jobs.
+    <p>Run <code>bugmonitor init</code> and answer yes to Jenkins. You'll need the Jenkins address, your user ID, and an API token
+    (in Jenkins: your name at the top right, then Security, then Add new token).</p></div>`; return; }
+  const d = await j("/api/jenkins");
+  const tests = b => b.tests ? `${b.tests.failed ? `<span class="overdue">${b.tests.failed} failed</span>` : "all passed"} of ${b.tests.total}` : '<span class="muted">—</span>';
+  body.innerHTML = `${d.last_error ? `<div class="banner" style="margin-bottom:16px">Jenkins: ${esc(d.last_error)}</div>` : ""}
+    ${d.running.length ? `<div class="card" style="margin-bottom:16px"><div class="card-h"><h3>Running now</h3></div><div class="card-b"><div class="list">
+      ${d.running.map(b => { const p = b.progress; return `<div class="li"><div class="grow"><div class="t1"><a href="${esc(safeUrl(b.url))}" target="_blank">${esc(b.job)} #${b.number}</a>
+        ${b.is_deploy ? `<span class="chip">deploy to ${esc(b.environment || "?")}</span>` : ""}</div>
+        <div class="t2">started by ${esc(b.triggered_by || "?")} ${ago(b.started)} ago${p ? ` · ${p.done} of ${p.total} stages done${p.current ? `, now ${esc(p.current)}` : ""}` : ""}</div>
+        ${p && p.total ? `<div class="prog" style="margin-top:6px"><i style="width:${p.done / p.total * 100}%;background:var(--bar)"></i></div>` : ""}</div></div>`; }).join("")}</div></div></div>` : ""}
+    <div class="card"><div class="card-h"><h3>Recent builds</h3><span class="sub">${d.last_sync ? "checked " + ago(d.last_sync) + " ago" : "waiting for first sync"}</span></div>
+      <div class="tw" style="max-height:none"><table><thead><tr><th class="nosort">Job</th><th class="nosort">Result</th><th class="nosort">Branch</th>
+        <th class="nosort">Started by</th><th class="nosort">When</th><th class="nosort">Took</th><th class="nosort">Tests</th><th class="nosort">Stages</th><th class="nosort">Tickets</th></tr></thead><tbody>
+      ${d.recent.map(b => `<tr data-href="${esc(safeUrl(b.url || ""))}"><td class="wrap"><b>${esc(b.job)}</b> <span class="muted">#${b.number}</span>${b.is_deploy ? ` <span class="chip">deploy ${esc(b.environment || "")}</span>` : ""}</td>
+        <td>${jkBadge(b)}</td><td>${b.branch ? `<span class="path">${esc(b.branch)}</span>` : '<span class="muted">—</span>'}</td>
+        <td>${esc(b.triggered_by || "")}</td><td class="muted">${ago(b.started)} ago</td><td class="num muted">${dur(b.duration_s)}</td><td class="num">${tests(b)}</td>
+        <td><div class="chips">${(b.stages || []).map(s => `<span class="chip" title="${esc(s.status)} · ${dur(s.duration_s)}" style="${["FAILED", "UNSTABLE"].includes(s.status) ? "border-color:var(--critical);color:var(--critical-ink)" : ""}">${esc(s.name)}</span>`).join("") || '<span class="muted">—</span>'}</div></td>
+        <td><div class="chips">${(b.tickets || []).map(k => `<a class="chip" href="#" data-open="${esc(k)}" data-stop>${esc(k)}</a>`).join("") || '<span class="muted">—</span>'}</div></td></tr>`).join("")
+        || '<tr><td colspan="9" class="empty">No builds in the last two weeks.</td></tr>'}</tbody></table></div></div>`;
+}
+
+async function renderTests(body) {
+  const d = await j("/api/tests/flaky?days=14");
+  const row = t => `<tr ${t.last_url ? `data-href="${esc(safeUrl(t.last_url))}"` : ""}><td class="wrap"><span class="path">${esc(t.test)}</span><div class="sub">${esc(t.pipelines.join(", "))}</div></td>
+    <td class="num">${t.failures} of ${t.runs}</td><td class="num">${t.same_commit || "—"}</td><td class="num">${t.flips || "—"}</td>
+    <td class="muted">${t.last_failed ? ago(t.last_failed) + " ago" : ""}</td><td class="wrap"><span class="sub">${esc((t.last_error || "").slice(0, 160))}</span></td></tr>`;
+  const head = '<thead><tr><th class="nosort">Test</th><th class="nosort">Failed</th><th class="nosort">Same-commit flakes</th><th class="nosort">Flips</th><th class="nosort">Last failed</th><th class="nosort">Last error</th></tr></thead>';
+  body.innerHTML = tiles([["Flaky tests", d.flaky.length, "failed and passed on the same commit, or keep flipping"],
+      ["Failing now", d.failing_now.length, "failed in the latest builds"], ["Builds with test reports", d.builds_with_tests, `last ${d.days} days`],
+      ["Builds with a failing test", d.fail_rate == null ? "—" : d.fail_rate + "%", ""]]) + `
+    <div class="card"><div class="card-h"><h3>Flaky tests</h3><span class="sub">from Jenkins test reports and JUnit files uploaded by GitHub Actions</span></div>
+      <div class="tw" style="max-height:none"><table>${head}<tbody>${d.flaky.map(row).join("") || '<tr><td colspan="6" class="empty">No flaky tests found. Results appear once builds publish JUnit reports.</td></tr>'}</tbody></table></div></div>
+    <div class="card mt"><div class="card-h"><h3>Failing now</h3><span class="sub">failed in the last two builds of a pipeline</span></div>
+      <div class="tw" style="max-height:none"><table>${head}<tbody>${d.failing_now.map(row).join("") || '<tr><td colspan="6" class="empty">Nothing failing consistently.</td></tr>'}</tbody></table></div></div>`;
+}
+
+async function renderAutoNotes() {
+  const el = $("#dep-notes"); if (!el) return;
+  const notes = await j("/api/release-notes/auto");
+  if (!notes.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="card mt"><div class="card-h"><h3>Release notes</h3><span class="sub">drafted when a production deploy succeeds</span></div><div class="card-b"><div class="list">
+    ${notes.map((n, i) => `<details class="li" style="display:block"><summary style="cursor:pointer"><b>${esc(n.title)}</b>
+        <span class="sub">· ${n.tickets} ticket${n.tickets === 1 ? "" : "s"} · ${esc(n.creator || "")} · ${ago(n.created)} ago</span>
+        ${(n.not_done || []).length ? stBadge("warning", `${n.not_done.length} not done in Jira`) : ""}</summary>
+      <pre class="cmd" id="rn-auto-${i}">${esc(n.text)}</pre><div class="actions" style="margin-top:6px"><button class="btn" data-copy-pre="rn-auto-${i}">Copy</button></div></details>`).join("")}</div></div></div>`;
+}
+
+async function renderPeriodReport(body) {
+  const monthly = insView === "monthly";
+  let picker = "";
+  if (monthly) {
+    const now = new Date(), opts = [];
+    for (let i = 0; i < 6; i++) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      opts.push([`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, d.toLocaleDateString(undefined, {month: "long", year: "numeric"}) + (i === 0 ? " (so far)" : "")]); }
+    window.__repMonth = window.__repMonth || opts[0][0];
+    picker = `<select id="rep-month">${opts.map(([v, l]) => `<option value="${v}" ${v === window.__repMonth ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+    REPORT = await j("/api/report/monthly?month=" + window.__repMonth);
+  } else {
+    const list = await j("/api/report/sprints");
+    if (!list.length) { body.innerHTML = '<div class="banner">No sprints found yet. Sprints come from the Sprint field on your team\'s tickets.</div>'; return; }
+    window.__repSprint = window.__repSprint || (list.find(x => x.state === "closed") || list[0]).id;
+    picker = `<select id="rep-sprint">${list.map(x => `<option value="${x.id}" ${x.id == window.__repSprint ? "selected" : ""}>${esc(x.name)} (${esc(x.state)})</option>`).join("")}</select>`;
+    REPORT = await j("/api/report/sprint?id=" + window.__repSprint);
+  }
+  const r = REPORT;
+  if (r.error) { body.innerHTML = `<div class="banner">${esc(r.error)}</div>`; return; }
+  const pct = v => v == null ? "—" : v + "%", b = r.bugs, dl = r.delivery, dr = dl.dora;
+  const top = monthly ? [["Bugs reported", b.created, `${b.resolved} fixed · net ${b.net > 0 ? "+" : ""}${b.net}`], ["Median time to fix", hrs(b.median_fix_hours), ""],
+      ["Finished", dl.finished, dl.points ? `${dl.points} points` : "tickets"], ["Production deploys", dr.deploys, `change failure ${pct(dr.change_failure_rate)}`],
+      ["Builds passed", pct(r.builds.success_pct), `${r.builds.runs} builds`], ["Flaky tests", r.builds.flaky_tests, ""]]
+    : [["Completed", `${r.completed} ${r.unit}`, `${pct(r.completion_pct)} of ${r.committed + r.added}`], ["Committed at start", r.committed, `${r.completed_committed} finished`],
+      ["Added after start", r.added, r.unit], [r.sprint.state === "active" ? "Not done yet" : "Carried over", r.carried_over.length, "tickets"], ["Bugs reported", b.created, `${b.resolved} fixed`],
+      ["Production deploys", dr.deploys, `change failure ${pct(dr.change_failure_rate)}`]];
+  body.innerHTML = `<div class="card"><div class="toolbar">${picker}<button class="btn" id="period-copy">Copy as text</button>
+      <button class="btn" id="period-post">Send to my Teams chat</button><span class="sub" id="period-msg">${monthly ? "Sent to you automatically on the first workday of each month" : "Sent to you automatically when a sprint closes"}</span></div>
+    <div class="pad">${tiles(top)}
+      <div class="grid two">${r.people.length ? `<div class="card"><div class="card-h"><h3>By person</h3></div><div class="card-b"><div class="hbars" id="period-people"></div></div></div>` : ""}
+        <div class="card"><div class="card-h"><h3>Shareable summary</h3></div><div class="card-b"><pre class="cmd" id="period-text" style="max-height:520px">${esc(r.text)}</pre></div></div></div></div></div>`;
+  if (r.people.length) hbars($("#period-people"), r.people.map(p => ({label: p.person, n: p.done})));
+}
 
 /* ---------------------------------------------------------------- data + nav */
 async function refresh() {
@@ -1701,7 +1811,8 @@ document.addEventListener("click", async ev => {
   if (pr && !ev.target.closest("[data-open]") && !ev.target.closest("a")) { const [r, n] = pr.dataset.pr.split("|"); return openPR(r, n); }
   const op = ev.target.closest("[data-open]"); if (op) { ev.preventDefault(); ev.stopPropagation(); return openTicket(op.dataset.open); }
   if (ev.target.closest("[data-close]") || ev.target.id === "scrim") return closeDrawer();
-  const href = ev.target.closest("tr[data-href]"); if (href && !ev.target.closest("a")) return window.open(href.dataset.href, "_blank");
+  const href = ev.target.closest("tr[data-href]");
+  if (href && !ev.target.closest("a")) { const u = safeUrl(href.dataset.href); return u === "#" ? undefined : window.open(u, "_blank", "noopener"); }
   const ack = ev.target.closest("[data-ack]");
   if (ack) { await j(`/api/alerts/${ack.dataset.ack}/ack`, {method: "POST"}); renderActivity(); return refresh(); }
   const sb = ev.target.closest("#b-scope button");
@@ -1730,13 +1841,17 @@ async function clickV11(ev) {
   if (prLink) { ev.preventDefault(); closeSearch(); const [r, n] = prLink.dataset.pr.split("|"); openPR(r, n); return true; }
   if (c("#gs-panel")) {
     const out = c("[data-href-out]");
-    if (out) { ev.preventDefault(); window.open(out.dataset.hrefOut, "_blank"); closeSearch(); return true; }
+    if (out) { ev.preventDefault(); const u = safeUrl(out.dataset.hrefOut); if (u !== "#") window.open(u, "_blank", "noopener"); closeSearch(); return true; }
     if (c("[data-open]") || c("[data-pr]")) { closeSearch(); return false; }   // the usual handlers open it
     return true;
   }
   if (!c("#gsearch")) $("#gs-panel").classList.remove("on");
   const qs = c("#q-seg button"); if (qs) { qView = qs.dataset.v; store.set("bm-q", qView); renderQuality(); return true; }
   const cs = c("#code-seg button"); if (cs) { codeView = cs.dataset.v; store.set("bm-code", codeView); renderCode(); return true; }
+  if (t.id === "period-copy") { await copyText(REPORT ? REPORT.text : "", t); return true; }
+  if (t.id === "period-post") { const r = await post("/api/report/post", insView === "monthly" ? {kind: "monthly", month: window.__repMonth} : {kind: "sprint", id: window.__repSprint});
+    $("#period-msg").textContent = r.ok ? "Sent to your Teams chat." : (r.error || "Teams didn't accept the message."); return true; }
+  const cp = c("[data-copy-pre]"); if (cp) { await copyText($("#" + cp.dataset.copyPre).textContent, t); return true; }
   if (t.id === "su-copy") { await copyText(STANDUP ? STANDUP.text : "", t); return true; }
   if (t.id === "su-post" || t.id === "su-team") {
     const r = await post("/api/standup/post", {team: t.id === "su-team"});
@@ -1765,6 +1880,8 @@ async function clickV11(ev) {
   return false;
 }
 document.addEventListener("change", async ev => {
+  if (ev.target.id === "rep-month") { window.__repMonth = ev.target.value; return renderInsights(); }
+  if (ev.target.id === "rep-sprint") { window.__repSprint = ev.target.value; return renderInsights(); }
   const sn = ev.target.closest("[data-snooze]");
   if (sn && sn.value) { await post("/api/snooze", {key: sn.dataset.snooze, hours: +sn.value}); ticketExtras(sn.dataset.snooze); }
   const mv = ev.target.closest("[data-move]");

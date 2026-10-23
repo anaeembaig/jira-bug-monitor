@@ -217,6 +217,32 @@ class CodeHealthSettings:
 
 
 @dataclass
+class JenkinsSettings:
+    """Jenkins builds, stages, test results, and deploy jobs."""
+    enabled: bool = False
+    url: str = ""                    # e.g. https://jenkins.example.com
+    user: str = ""                   # your Jenkins user ID
+    token: str = ""                  # blank = credential store (bugmonitor init puts it there)
+    jobs: list[str] = field(default_factory=list)      # job or folder full names; blank = every job built recently
+    exclude: list[str] = field(default_factory=list)   # job names containing any of these are skipped
+    days: int = 14
+    max_jobs: int = 80
+    deploy_jobs: list[str] = field(default_factory=list)  # name patterns; blank = names with [deployments] workflow_keywords
+    env_params: list[str] = field(default_factory=lambda: ["ENVIRONMENT", "ENV", "TARGET_ENV", "DEPLOY_ENV",
+                                                         "TARGET", "STAGE"])
+    alert_failures: bool = True      # a default-branch job goes red
+    ca_bundle: str = ""              # path to your company's CA certificate, if Jenkins uses an internal one
+    fetch_tests: bool = True         # read JUnit test reports for flaky-test detection
+
+
+@dataclass
+class ReportSettings:
+    monthly: bool = True             # last month's report to your private chat on the first workday
+    sprint_review: bool = True       # a sprint review to your private chat when a sprint closes
+    time: str = "09:00"
+
+
+@dataclass
 class DashboardSettings:
     host: str = "127.0.0.1"
     port: int = 8765
@@ -255,6 +281,8 @@ class Settings:
     sla: SLASettings = field(default_factory=SLASettings)
     quality: QualitySettings = field(default_factory=QualitySettings)
     code: CodeHealthSettings = field(default_factory=CodeHealthSettings)
+    jenkins: JenkinsSettings = field(default_factory=JenkinsSettings)
+    reports: ReportSettings = field(default_factory=ReportSettings)
     config_file: Path | None = None
     secret_sources: dict = field(default_factory=dict)  # name -> env | keychain | config | ""
 
@@ -341,12 +369,15 @@ def load_settings(path: str | os.PathLike | None = None, *, secrets: bool = True
     jira.base_url = os.environ.get("JIRA_BASE_URL", jira.base_url).rstrip("/")
     jira.email = os.environ.get("JIRA_EMAIL", jira.email)
     sources: dict = {}
+    jenkins_token = ""
     if secrets:
         jira.api_token = _secret("JIRA_API_TOKEN", jira.api_token, "jira_api_token", sources)
         gh.token = _secret("GITHUB_TOKEN", gh.token, "github_token", sources)
         alerts.teams_webhook = _secret("BUGMON_TEAMS_WEBHOOK", alerts.teams_webhook, "teams_webhook", sources)
         alerts.slack_webhook = _secret("BUGMON_SLACK_WEBHOOK", alerts.slack_webhook, "slack_webhook", sources)
         alerts.smtp_password = _secret("BUGMON_SMTP_PASSWORD", alerts.smtp_password, "smtp_password", sources)
+        jenkins_raw = raw.get("jenkins", {})
+        jenkins_token = _secret("BUGMON_JENKINS_TOKEN", jenkins_raw.get("token", ""), "jenkins_token", sources)
         for r in routes:
             if r.webhook.startswith("keychain:"):
                 r.webhook = _secret("", r.webhook, f"route:{r.name}", sources)
@@ -365,4 +396,15 @@ def load_settings(path: str | os.PathLike | None = None, *, secrets: bool = True
                     _apply(SLASettings(), raw.get("sla", {})),
                     _apply(QualitySettings(), raw.get("quality", {})),
                     _apply(CodeHealthSettings(), raw.get("code_health", {})),
+                    _jenkins(raw.get("jenkins", {}), jenkins_token if secrets else ""),
+                    _apply(ReportSettings(), raw.get("reports", {})),
                     cfg_path, sources)
+
+
+def _jenkins(raw: dict, token: str) -> JenkinsSettings:
+    j = _apply(JenkinsSettings(), raw)
+    # Not JENKINS_URL: Jenkins sets that in every build, which would silently repoint Bug Monitor on an agent.
+    j.url = (os.environ.get("BUGMON_JENKINS_URL") or j.url).rstrip("/")
+    j.user = os.environ.get("BUGMON_JENKINS_USER") or j.user
+    j.token = token
+    return j

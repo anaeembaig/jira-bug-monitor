@@ -544,7 +544,9 @@ def _sync_github(conn, settings, alerter, GitHubClient, resolve_token):
         client = GitHubClient(resolve_token(settings.github.token))
         out = sync_github(conn, settings, client, alerter)
         from .codehealth import sync_ci, sync_security
-        for name, fn in (("deployments", sync_deployments), ("ci", sync_ci), ("security", sync_security)):
+        from .testhealth import ingest_github_tests
+        for name, fn in (("deployments", sync_deployments), ("ci", sync_ci), ("security", sync_security),
+                         ("tests", ingest_github_tests)):
             try:
                 out[name] = fn(conn, settings, client, alerter)
             except Exception as e:      # one part failing never stops the others
@@ -579,6 +581,8 @@ def run_forever(conn, settings: Settings, client: JiraClient, stop_event=None) -
                 alerter.raise_alert({"key": "Bug Monitor", "summary": str(e)[:300], "url": None},
                                     "sync_failing", "3 syncs in a row failed", external=True, team=False)
         sync_github_safe(conn, settings, alerter)
+        from .jenkins_sync import sync_jenkins_safe
+        sync_jenkins_safe(conn, settings, alerter)
         from .jobs import run_all
         run_all(conn, settings, alerter)
         if stop_event:

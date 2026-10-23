@@ -458,6 +458,57 @@ def export_timesheet(days: int = 14, team: bool = False, person: str | None = No
     return export_csv(conn, settings, days, person, team)
 
 
+# --------------------------------------------------------------------------- Jenkins, tests, reports
+@mcp.tool()
+def jenkins_builds(job: str | None = None, ticket: str | None = None) -> dict | list:
+    """Jenkins builds: running now (with stage progress) and recent results, who triggered them, commits,
+    linked Jira tickets, and test counts. Filter by part of a job name, or by a Jira key."""
+    from .jenkins_sync import for_ticket, overview
+    if ticket:
+        return for_ticket(conn, ticket.upper(), 20)
+    o = overview(conn, settings)
+    if job:
+        o["recent"] = [b for b in o["recent"] if job.lower() in (b["job"] or "").lower()]
+        o["running"] = [b for b in o["running"] if job.lower() in (b["job"] or "").lower()]
+    return o
+
+
+@mcp.tool()
+def flaky_tests(days: int = 14) -> dict:
+    """Tests that failed and passed on the same commit, or keep flipping, across Jenkins and GitHub Actions;
+    plus tests failing in the latest builds. Includes the last error and a link to the build."""
+    from .testhealth import flaky_tests as ft
+    return ft(conn, settings, days)
+
+
+@mcp.tool()
+def deploy_release_notes(limit: int = 5) -> list[dict]:
+    """Release notes drafted automatically for recent successful production deploys (GitHub or Jenkins)."""
+    from .deployments import release_notes_list
+    return release_notes_list(conn, limit)
+
+
+@mcp.tool()
+def monthly_report(month: str | None = None) -> dict:
+    """Monthly report (month as YYYY-MM; default this month so far): bugs, SLA, delivery and DORA, quality,
+    builds and flaky tests, hotspots, people, and time. 'text' is ready to share."""
+    from .reports import monthly
+    return monthly(conn, settings, month)
+
+
+@mcp.tool()
+def sprint_review(sprint: str | None = None) -> dict:
+    """Sprint review for a sprint (name or ID; default the last closed sprint): committed vs. completed, added
+    after start, carried over, bugs, SLA, delivery, builds, tests, and people. 'text' is ready to share."""
+    from .reports import sprint_review as sr, sprints_list
+    sid = None
+    if sprint:
+        sid = next((s["id"] for s in sprints_list(conn) if str(s["id"]) == sprint or sprint.lower() in (s["name"] or "").lower()), None)
+        if sid is None:
+            return {"error": f"No sprint matching '{sprint}'.", "sprints": [s["name"] for s in sprints_list(conn)]}
+    return sr(conn, settings, sid)
+
+
 @mcp.tool()
 def sync_now() -> dict:
     """Pull the latest from Jira (and GitHub, if enabled) right now."""
@@ -468,6 +519,8 @@ def sync_now() -> dict:
     except JiraError as e:
         out = {"jira": {"error": str(e)}}
     out["github"] = sync_github_safe(conn, settings)
+    from .jenkins_sync import sync_jenkins_safe
+    out["jenkins"] = sync_jenkins_safe(conn, settings, force=True)
     return out
 
 

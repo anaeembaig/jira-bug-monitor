@@ -13,12 +13,12 @@ The dashboard has these tabs:
 | My Tickets | Everything assigned to you, any type, as a board, a table, or one tab per status, with time spent in every status |
 | Team | Team board, active sprint with burnup, releases, review queue, QA handoff, stuck work, forecast, capacity, and release readiness |
 | Time Log | Your hours per day from Jira worklogs, time tracked from Claude, and what you did on each ticket; the team's hours |
-| Deployments | Every environment: what's running now with step progress, the latest deploy to each, who deployed, what shipped, rollbacks |
-| Insights | Cycle time by stage, PR health, bug quality, estimate accuracy, delivery metrics, a weekly report, and triage help |
+| Deployments | Every environment: what's running now with step progress, the latest deploy to each, who deployed, what shipped, rollbacks, and release notes drafted for each production deploy |
+| Insights | Cycle time by stage, PR health, bug quality, estimate accuracy, delivery metrics, weekly, monthly, and sprint-review reports, and triage help |
 | Bugs | Every tracked bug, open or resolved, with an urgency score, SLA timer, and linked PRs |
 | Quality | Bug reports missing details, SLA breaches and compliance, and the code areas bugs come from |
 | GitHub | Your PRs with reviewers, comments, checks, and merge state; your branches |
-| Code Health | Builds on default branches, flaky runs, security alerts, and suggested reviewers |
+| Code Health | Builds on default branches (GitHub Actions and Jenkins), checks, Jenkins builds with stages, flaky tests, security alerts, and suggested reviewers |
 | Activity | Alerts, work in progress, and time tracked from Claude |
 | Settings (gear icon) | Notifications, quiet hours, summaries, standup, SLA, report checks, code health, channels, teammates, time off, and escalations |
 
@@ -166,6 +166,32 @@ Bug Monitor also suggests worklogs you probably forgot: time tracked from Claude
 - **Capacity** compares each person's focus hours, minus time off from Settings, with their remaining work.
 - **Release readiness** is a go/no-go checklist: tickets done, no high-priority bugs, PRs merged, QA finished, and deployed to a test environment.
 
+## Jenkins
+
+Run `bugmonitor init` and answer yes to Jenkins. You'll need the Jenkins address, your Jenkins user ID, and an API token (in Jenkins: your name at the top right, then **Security**, then **Add new token**). The token goes into your credential store. If Jenkins uses a company certificate, set `ca_bundle` under `[jenkins]` to the certificate file from IT.
+
+Bug Monitor reads every job built in the last two weeks, including folders and multibranch projects, or only the jobs you list under `jobs`. For each build it shows:
+
+- **Result and stages**, with live progress for running builds
+- **Who started it**, the commits it built, and the Jira tickets they mention
+- **Test results** from the JUnit report, used for flaky-test detection
+- **Deploy jobs** (names with "deploy" or "release", or your `deploy_jobs` patterns) on the Deployments tab, with the environment taken from a build parameter such as `ENVIRONMENT`
+
+When a default-branch job breaks, you hear about it if your commit broke it, and channels with the `ci` event hear about it too. Build parameters that look like passwords, secrets, tokens, or keys are never stored.
+
+## Flaky Tests
+
+The **Tests** view in Code Health reads Jenkins test reports and JUnit XML files that GitHub Actions uploads as artifacts (artifact names containing "test", "junit", "report", or "results"). A test counts as flaky when it failed and passed on the same commit, or keeps flipping between pass and fail. Tests failing in the last two builds of a pipeline are listed separately as failing now.
+
+## Reports
+
+On the Insights tab:
+
+- **Monthly:** bugs reported and fixed, time to fix, reopens, SLA, finished work, production deploys with delivery metrics, builds and flaky tests, where bugs come from, and work per person
+- **Sprint review:** committed vs. completed, work added after the start, what carried over, plus the same bug, delivery, and build numbers for the sprint
+
+Both have **Copy as text** and **Send to my Teams chat**. They also go to your private chat automatically: last month's report on the first workday of the month, and a sprint review when a sprint closes. Turn either off in Settings under Reports.
+
 ## Deployments
 
 Bug Monitor reads GitHub deployments for every environment in your repos. GitHub Actions jobs that use `environment:` create these automatically. For each deploy it shows:
@@ -175,6 +201,8 @@ Bug Monitor reads GitHub deployments for every environment in your repos. GitHub
 - **Rollbacks:** a deploy of an older version than the one before it, with the tickets it took back out of that environment
 - **Live progress:** deploy pipelines in GitHub Actions, step by step (workflows whose names include "deploy" or "release")
 - **Links:** logs and the environment's URL
+
+When a production deploy succeeds, from GitHub or Jenkins, release notes are drafted from the tickets it shipped and kept on the Deployments tab, ready to copy.
 
 Each ticket's details list every environment it reached. A rollback removes the ticket from that environment again, and the QA handoff view uses this to show what's actually testable. Add more repos under `[github] repos`, and rename environments under `[deployments.aliases]`.
 
@@ -223,6 +251,9 @@ Ask in plain language from any session:
 - "Are we going to make the sprint?" or "Is 2026.11 ready to release?"
 - "Is main green?" or "Who should review my PR?"
 - "What time haven't I logged this week?" or "Export my timesheet for the last two weeks."
+- "Which tests are flaky?" or "Is the Jenkins build for HUM-412 green?"
+- "Give me the release notes for today's production deploy."
+- "Write the sprint review for Sprint 41." or "Give me the monthly report for September."
 
 ### Available Tools
 
@@ -260,6 +291,9 @@ Ask in plain language from any session:
 | `delivery_forecast`, `team_capacity`, `release_readiness` | Sprint and release forecast, capacity, and go/no-go checks |
 | `ci_health`, `suggest_reviewers`, `security_alerts` | Builds, reviewer suggestions, and security alerts |
 | `suggested_worklogs`, `export_timesheet` | Worklogs you may have missed, and a CSV timesheet |
+| `jenkins_builds`, `flaky_tests` | Jenkins builds by job or ticket, and flaky or failing tests |
+| `deploy_release_notes` | Release notes drafted for recent production deploys |
+| `monthly_report`, `sprint_review` | Shareable monthly and sprint-review reports |
 | `sync_now` | Pulls from Jira and GitHub right away |
 
 Each entry records whether it came from `claude-cli` or `claude-desktop`.

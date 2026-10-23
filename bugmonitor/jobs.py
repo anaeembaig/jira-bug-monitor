@@ -24,6 +24,7 @@ def run_all(conn, settings: Settings, alerter: Alerter | None = None, now: datet
                      ("timelog", lambda: _timelog_reminder(conn, settings, alerter, now)),
                      ("standup", lambda: standups(conn, settings, alerter, now)),
                      ("sla", lambda: _sla(conn, settings, alerter)),
+                     ("reports", lambda: scheduled_reports(conn, settings, alerter, now)),
                      ("housekeeping", lambda: housekeeping(conn, settings))):
         try:
             out[name] = fn()
@@ -66,6 +67,44 @@ def standups(conn, settings: Settings, alerter: Alerter, now: datetime | None = 
             if alerter.post_card(r.webhook, card):
                 set_state(conn, f"standup_team:{r.name}", today)
                 sent.append(f"team:{r.name}")
+    conn.commit()
+    return sent
+
+
+def scheduled_reports(conn, settings: Settings, alerter: Alerter, now: datetime | None = None) -> list[str]:
+    """Last month's report on the first workday of the month, and a review when a sprint closes. Private chat only."""
+    from datetime import timedelta
+    from .reports import monthly, report_card, sprint_review
+    from .timelog import is_workday
+    r = settings.reports
+    hook = settings.alerts.teams_webhook
+    now = now or datetime.now()
+    if not hook or in_quiet_hours(settings.notify, now) or not is_workday(settings, now.date()):
+        return []
+    h, m = ((r.time or "09:00") + ":0").split(":")[:2]
+    if (now.hour, now.minute) < (int(h), int(m)):
+        return []
+    sent = []
+    if r.monthly:
+        first = now.date().replace(day=1)
+        while not is_workday(settings, first) and first.day < 8:
+            first += timedelta(days=1)
+        last_month = (now.date().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        if now.date() >= first and get_state(conn, "report_monthly") != last_month:
+            if alerter.post_card(hook, report_card(monthly(conn, settings, last_month), settings)):
+                set_state(conn, "report_monthly", last_month)
+                sent.append(f"monthly:{last_month}")
+    if r.sprint_review:
+        recent = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        from .reports import team_sprint_ids
+        mine = team_sprint_ids(conn)
+        for sp in conn.execute("SELECT id, name FROM sprints WHERE state='closed' AND complete >= ?", (recent,)).fetchall():
+            if sp["id"] not in mine or get_state(conn, f"report_sprint:{sp['id']}"):
+                continue
+            rep = sprint_review(conn, settings, sp["id"])
+            if not rep.get("error") and alerter.post_card(hook, report_card(rep, settings)):
+                set_state(conn, f"report_sprint:{sp['id']}", datetime.now(timezone.utc).isoformat())
+                sent.append(f"sprint:{sp['name']}")
     conn.commit()
     return sent
 
@@ -261,6 +300,7 @@ def housekeeping(conn, settings: Settings, force: bool = False) -> dict | None:
     """Once a day: drop old alerts, audit entries, and work logs; tighten file permissions."""
     import os
     from datetime import timedelta
+    from .testhealth import prune as prune_tests
     today = datetime.now().date().isoformat()
     if not force and get_state(conn, "housekeeping") == today:
         return None
@@ -282,6 +322,10 @@ def housekeeping(conn, settings: Settings, force: bool = False) -> dict | None:
         "dismissed": conn.execute("DELETE FROM sync_state WHERE k LIKE 'wl_dismiss:%' AND v < ?", (cut(45),)).rowcount,
         "deploy_retries": conn.execute("DELETE FROM sync_state WHERE k LIKE 'deploy_retry:%' AND substr(k, 14) "
                                        "NOT IN (SELECT id FROM deployments WHERE tickets IS NULL)").rowcount,
+        "jenkins_state": conn.execute("DELETE FROM sync_state WHERE k LIKE 'jk_alerted:%' AND substr(k, 12) "
+                                      "NOT IN (SELECT id FROM jenkins_builds)").rowcount,
+        "tests": prune_tests(conn, max(settings.code.ci_days, settings.jenkins.days, 40)),
+        "release_notes": conn.execute("DELETE FROM release_notes WHERE deployment_id NOT IN (SELECT id FROM deployments)").rowcount,
         "watch_errors": conn.execute("DELETE FROM sync_state WHERE k LIKE 'watch_error:%' AND "
                                      "substr(k, 13) NOT IN (SELECT key FROM watches)").rowcount,
     }

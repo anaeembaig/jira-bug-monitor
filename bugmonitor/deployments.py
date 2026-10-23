@@ -168,6 +168,9 @@ def _upsert_deployment(conn, settings, client, alerter, repo, n, prefixes, quiet
          json.dumps(shipped["prs"]), json.dumps(shipped["authors"]),
          shipped["previous_sha"], int(bool(shipped["rollback"])),
          (finished - started).total_seconds() if finished and started else None))
+    if (latest in DONE_OK and shipped["tickets"] is not None and not shipped["rollback"]
+            and is_production(settings, env)):
+        draft_release_notes(conn, settings, n["id"])
     conn.commit()
     if quiet or shipped["tickets"] is None:
         return 0          # alert once we know what's in it
@@ -175,6 +178,28 @@ def _upsert_deployment(conn, settings, client, alerter, repo, n, prefixes, quiet
     if old and old["state"] == latest and not newly_known:
         return 0
     return _alert(conn, settings, alerter, repo, env, n, latest, shipped, last_log or last_env)
+
+
+def draft_release_notes(conn, settings: Settings, deployment_id: str) -> bool:
+    """Release notes for a successful production deploy, drafted once and kept for the dashboard."""
+    if conn.execute("SELECT 1 FROM release_notes WHERE deployment_id=?", (deployment_id,)).fetchone():
+        return False
+    from .triage import release_notes
+    rn = release_notes(conn, settings, deployment_id=deployment_id)
+    d = conn.execute("SELECT repo, environment FROM deployments WHERE id=?", (deployment_id,)).fetchone()
+    if not d:
+        return False
+    conn.execute("INSERT OR IGNORE INTO release_notes(deployment_id, created, repo, environment, title, text, tickets, not_done) "
+                 "VALUES(?,?,?,?,?,?,?,?)", (deployment_id, now_iso(), d["repo"], d["environment"], rn["title"],
+                                              rn["text"] if rn["tickets"] else rn["text"] + "\n\nNo Jira tickets found in this deploy.",
+                                              rn["tickets"], json.dumps(rn["not_done"])))
+    return True
+
+
+def release_notes_list(conn, limit: int = 20) -> list[dict]:
+    return [row_to_dict(r) for r in conn.execute(
+        "SELECT r.*, d.creator, d.sha, d.url AS deploy_url FROM release_notes r LEFT JOIN deployments d "
+        "ON d.id = r.deployment_id ORDER BY r.created DESC LIMIT ?", (limit,))]
 
 
 def _alert(conn, settings, alerter, repo, env, n, state, shipped, url) -> int:
@@ -307,11 +332,14 @@ def environments_for_tickets(conn) -> dict[str, list[str]]:
     return out
 
 
-def dora(conn, settings: Settings, days: int = 30) -> dict:
-    """Delivery metrics from production deploys over the last `days`."""
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    prod = [row_to_dict(r) for r in conn.execute(
-        "SELECT * FROM deployments WHERE kind='deployment' AND created >= ? ORDER BY created", (since,))]
+def dora(conn, settings: Settings, days: int = 30, start: datetime | None = None, end: datetime | None = None) -> dict:
+    """Delivery metrics from production deploys over the last `days` (or between start and end)."""
+    start = start or datetime.now(timezone.utc) - timedelta(days=days)
+    end = end or datetime.now(timezone.utc)
+    days = max((end - start).days, 1)
+    prod = [d for d in (row_to_dict(r) for r in conn.execute(
+        "SELECT * FROM deployments WHERE kind='deployment' ORDER BY created"))
+        if start <= (parse_ts(d["created"]) or start - timedelta(1)) < end]
     prod = [d for d in prod if is_production(settings, d["environment"])]
     finished = [d for d in prod if d["state"] in DONE_OK | DONE_BAD | {"INACTIVE"}]
     # A change failed if its deploy failed, or if it went out and was later rolled back.

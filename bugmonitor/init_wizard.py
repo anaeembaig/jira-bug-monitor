@@ -59,7 +59,8 @@ def _keys_from_jql(jql: str) -> list[str]:
     return [m.group(1)] if m else []
 
 
-def run(io: IO | None = None, path: str | None = None, jira_factory=None, github_factory=None) -> int:
+def run(io: IO | None = None, path: str | None = None, jira_factory=None, github_factory=None,
+        jenkins_factory=None) -> int:
     io = io or IO()
     from .jira_client import JiraClient, JiraError
     jira_factory = jira_factory or JiraClient
@@ -148,9 +149,40 @@ def run(io: IO | None = None, path: str | None = None, jira_factory=None, github
     team_jql = (current.team.jql or f"{proj} AND (statusCategory != Done OR updated >= -30d)") if team_on else ""
     team_name = io.ask("Team name", current.team.name) if team_on else current.team.name
 
+    # ---------------------------------------------------------------- Jenkins
+    io.out("\n5. Jenkins (optional)")
+    jk = current.jenkins
+    jk_on = io.yes("Show Jenkins builds, test results, and deploy jobs?", jk.enabled)
+    jk_url, jk_user, jk_token, jk_ca = jk.url, jk.user, jk.token, jk.ca_bundle
+    if jk_on:
+        from .jenkins_client import JenkinsClient
+        jenkins_factory = jenkins_factory or JenkinsClient
+        jk_url = io.ask("Jenkins address, e.g. https://jenkins.example.com", jk_url).rstrip("/")
+        if jk_url.startswith("http://") and not io.yes("That address isn't https, so your token would travel "
+                                                        "unencrypted. Use it anyway?", False):
+            jk_url = io.ask("Jenkins https address", jk_url.replace("http://", "https://", 1)).rstrip("/")
+        jk_user = io.ask("Your Jenkins user ID", jk_user or email)
+        io.out(f"Create an API token in Jenkins: your name (top right), Security (or Configure), Add new token. "
+               f"{jk_url}/me/configure")
+        while True:
+            entered = io.secret("Jenkins API token", have=bool(jk_token))
+            jk_token = entered or jk_token
+            try:
+                who = jenkins_factory(jk_url, jk_user, jk_token, jk_ca).whoami()
+                io.out(f"Jenkins: connected as {who or jk_user}.")
+                break
+            except Exception as e:
+                io.out(f"That didn't work: {e}")
+                if "certificate" in str(e).lower():
+                    jk_ca = io.ask("Path to your company's CA certificate file (ask IT), or blank to skip", jk_ca)
+                if not io.yes("Try again?"):
+                    jk_on = False
+                    break
+
     # ---------------------------------------------------------------- save
     use_store = vault.store_available() and io.yes("Save tokens in your credential store (recommended)?")
-    secrets = {"jira_api_token": token, "teams_webhook": webhook, "github_token": gh_token if gh_on else ""}
+    secrets = {"jira_api_token": token, "teams_webhook": webhook, "github_token": gh_token if gh_on else "",
+               "jenkins_token": jk_token if jk_on else ""}
     stored = {}
     for name, value in secrets.items():
         if value and use_store and vault.set_secret(name, value):
@@ -170,6 +202,8 @@ def run(io: IO | None = None, path: str | None = None, jira_factory=None, github
         "github": {"enabled": gh_on, "orgs": orgs, "jira_prefixes": keys, "days": days,
                    "token": "" if stored.get("github_token") or not gh_on else (gh_token or "")},
         "team": {"jql": team_jql, "name": team_name},
+        "jenkins": {"enabled": jk_on, "url": jk_url, "user": jk_user, "ca_bundle": jk_ca,
+                    "token": "" if stored.get("jenkins_token") or not jk_on else (jk_token or "")},
     }
     changes = set_config_values(cfg, updates)
     io.out(f"\nSaved {cfg}" + (f" ({len(changes)} settings)" if changes else ""))
@@ -195,6 +229,7 @@ def move_secrets(path: str | None = None, out=print) -> int:
     import tomllib
     raw = tomllib.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
     plan = {("jira", "api_token"): "jira_api_token", ("github", "token"): "github_token",
+            ("jenkins", "token"): "jenkins_token",
             ("alerts", "teams_webhook"): "teams_webhook", ("alerts", "slack_webhook"): "slack_webhook",
             ("alerts", "smtp_password"): "smtp_password"}
     updates: dict = {}
@@ -213,7 +248,7 @@ def move_secrets(path: str | None = None, out=print) -> int:
 
 def secrets_status(path: str | None = None, out=print) -> int:
     s = load_settings(path)
-    labels = {"jira_api_token": "Jira API token", "github_token": "GitHub token",
+    labels = {"jira_api_token": "Jira API token", "github_token": "GitHub token", "jenkins_token": "Jenkins token",
               "teams_webhook": "Teams webhook", "slack_webhook": "Slack webhook", "smtp_password": "SMTP password"}
     for name, label in labels.items():
         src = s.secret_sources.get(name) or "not set"

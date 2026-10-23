@@ -16,6 +16,7 @@ SERVICE = "bugmonitor"
 NAMES = {
     "jira_api_token": "Jira API token",
     "github_token": "GitHub token",
+    "jenkins_token": "Jenkins API token",
     "teams_webhook": "Teams webhook (your private chat)",
     "slack_webhook": "Slack webhook",
     "smtp_password": "SMTP password",

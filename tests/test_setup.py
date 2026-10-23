@@ -44,6 +44,7 @@ def test_wizard_first_run_writes_config_and_keeps_tokens_out(tmp_path, _isolated
                  "Major",                          # Teams threshold
                  "y", "acme-org",                  # GitHub on, orgs
                  "y", "Web team",                  # team views, team name
+                 "n",                              # Jenkins off
                  "y",                              # use credential store
                  "n"],                             # connect Claude
         secrets=["bad-token", "good-token", "https://teams/hook", "ghp_x"])
@@ -71,10 +72,10 @@ def test_wizard_first_run_writes_config_and_keeps_tokens_out(tmp_path, _isolated
 def test_wizard_rerun_keeps_saved_values(tmp_path, _isolated_secrets, monkeypatch):
     cfg = tmp_path / "config.toml"
     monkeypatch.setattr("bugmonitor.install_claude.main", lambda: None)
-    first, _ = scripted(["acme", "dana@acme.com", "WEB", "60", "Normal", "n", "n", "y", "n"],
+    first, _ = scripted(["acme", "dana@acme.com", "WEB", "60", "Normal", "n", "n", "n", "y", "n"],
                         ["good-token", ""])
     init_wizard.run(first, str(cfg), jira_factory=FakeJiraLogin)
-    again, _ = scripted(["", "", "", "", "", "n", "n", "y", "n"], ["", ""])   # accept every default
+    again, _ = scripted(["", "", "", "", "", "n", "n", "n", "y", "n"], ["", ""])   # accept every default
     init_wizard.run(again, str(cfg), jira_factory=FakeJiraLogin)
     data = tomllib.loads(cfg.read_text())
     assert data["jira"]["base_url"] == "https://acme.atlassian.net" and "project in (WEB)" in data["jira"]["jql"]
@@ -83,7 +84,7 @@ def test_wizard_rerun_keeps_saved_values(tmp_path, _isolated_secrets, monkeypatc
 
 def test_unknown_project_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr("bugmonitor.install_claude.main", lambda: None)
-    io, said = scripted(["acme", "d@a.com", "NOPE", "WEB", "60", "Normal", "n", "n", "y", "n"], ["good-token", ""])
+    io, said = scripted(["acme", "d@a.com", "NOPE", "WEB", "60", "Normal", "n", "n", "n", "y", "n"], ["good-token", ""])
     assert init_wizard.run(io, str(tmp_path / "c.toml"), jira_factory=FakeJiraLogin) == 0
     assert any("Unknown project keys: NOPE" in s for s in said)
 
@@ -119,3 +120,28 @@ def test_config_location_order(tmp_path, monkeypatch):
     (tmp_path / "checkout").mkdir()
     (tmp_path / "checkout" / "config.toml").write_text("")
     assert config_path() == tmp_path / "checkout" / "config.toml"   # existing checkout setups keep working
+
+
+def test_wizard_jenkins_step(tmp_path, monkeypatch, _isolated_secrets):
+    cfg = tmp_path / "cfg" / "config.toml"
+    monkeypatch.setattr("bugmonitor.install_claude.main", lambda: None)
+
+    class FakeJenkinsLogin:
+        def __init__(self, url, user, token, ca=""):
+            if token != "jk-good":
+                raise RuntimeError("Jenkins rejected the login (401)")
+            self.user = user
+
+        def whoami(self):
+            return "Dana Cole"
+
+    io, said = scripted(["acme", "dana@acme.com", "WEB", "60", "Normal", "n", "n",
+                         "y", "https://jenkins.acme.com/", "dana", "y",      # Jenkins on, address, user, retry after a bad token
+                         "y", "n"],
+                        ["good-token", "", "jk-bad", "jk-good"])
+    assert init_wizard.run(io, str(cfg), jira_factory=FakeJiraLogin, jenkins_factory=FakeJenkinsLogin) == 0
+    data = tomllib.loads(cfg.read_text())
+    assert data["jenkins"]["enabled"] is True and data["jenkins"]["url"] == "https://jenkins.acme.com"
+    assert data["jenkins"]["user"] == "dana" and data["jenkins"]["token"] == ""
+    assert _isolated_secrets["jenkins_token"] == "jk-good"
+    assert any("connected as Dana Cole" in x for x in said)

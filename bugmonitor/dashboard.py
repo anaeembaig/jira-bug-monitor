@@ -26,6 +26,8 @@ def _background_sync(settings: Settings) -> None:
         j = settings.jira
         sync_once(conn, settings, JiraClient(j.base_url, j.email, j.api_token))
         sync_github_safe(conn, settings)
+        from .jenkins_sync import sync_jenkins_safe
+        sync_jenkins_safe(conn, settings, force=True)
     except Exception as e:
         log.warning("Manual sync failed: %s", e)
     finally:
@@ -38,7 +40,8 @@ def _public_config(settings: Settings) -> dict:
             "github_enabled": settings.github.enabled, "members": len(settings.team.members),
             "sla_enabled": settings.sla.enabled, "actions_allowed": settings.jira.allow_actions,
             "can_log_time": settings.timelog.allow_jira_write, "ci_enabled": settings.github.enabled and settings.code.ci,
-            "security_enabled": settings.github.enabled and settings.code.security}
+            "security_enabled": settings.github.enabled and settings.code.security,
+            "jenkins_enabled": settings.jenkins.enabled}
 
 
 def _jira(settings: Settings):
@@ -64,6 +67,12 @@ def _extra_get(conn, settings: Settings, path: str, q: dict):
         "/api/ci": lambda: codehealth.ci_overview(conn, settings),
         "/api/security": lambda: codehealth.security_overview(conn, settings),
         "/api/reviewers/mine": lambda: codehealth.my_review_suggestions(conn, settings),
+        "/api/jenkins": lambda: _jenkins_overview(conn, settings),
+        "/api/tests/flaky": lambda: _flaky(conn, settings, int(q.get("days", 14))),
+        "/api/release-notes/auto": lambda: _auto_notes(conn),
+        "/api/report/monthly": lambda: _reports().monthly(conn, settings, q.get("month") or None),
+        "/api/report/sprint": lambda: _reports().sprint_review(conn, settings, int(q["id"]) if q.get("id") else None),
+        "/api/report/sprints": lambda: _reports().sprints_list(conn),
         "/api/reviewers": lambda: codehealth.reviewer_suggestions(conn, settings, q.get("repo", ""), int(q.get("number", 0))),
         "/api/timelog/suggestions": lambda: {"items": timelog.suggestions(conn, settings, int(q.get("days", 7))),
                                              "can_write": settings.timelog.allow_jira_write},
@@ -101,8 +110,38 @@ def _extra_get(conn, settings: Settings, path: str, q: dict):
     return None
 
 
+def _jenkins_overview(conn, settings):
+    from .jenkins_sync import overview
+    return overview(conn, settings)
+
+
+def _flaky(conn, settings, days):
+    from .testhealth import flaky_tests
+    return flaky_tests(conn, settings, days)
+
+
+def _auto_notes(conn):
+    from .deployments import release_notes_list
+    return release_notes_list(conn)
+
+
+def _reports():
+    from . import reports
+    return reports
+
+
 def _extra_post(conn, settings: Settings, path: str, b: dict):
     from . import workflow
+    if path == "/api/report/post":
+        from .alerts import Alerter
+        from .reports import monthly, report_card, sprint_review
+        if not settings.alerts.teams_webhook:
+            return {"error": "Your private Teams chat isn't set up yet."}
+        rep = monthly(conn, settings, b.get("month") or None) if b.get("kind") == "monthly" else \
+            sprint_review(conn, settings, int(b["id"]) if b.get("id") else None)
+        if rep.get("error"):
+            return rep
+        return {"ok": Alerter(settings, conn).post_card(settings.alerts.teams_webhook, report_card(rep, settings))}
     if path == "/api/watch":
         return workflow.watch(conn, b.get("key", ""), b.get("note", ""))
     if path == "/api/unwatch":

@@ -194,6 +194,27 @@ security = true           # Dependabot and code scanning; a classic token needs 
 security_min_severity = "high"
 alert_security = true
 
+# Jenkins: builds, stages, who started them, test results, and deploy jobs. `bugmonitor init` sets this up.
+[jenkins]
+enabled = false
+url = ""                  # e.g. "https://jenkins.example.com"
+user = ""                 # your Jenkins user ID
+token = ""                # blank = credential store (Jenkins: your name > Security > Add new token)
+jobs = []                 # jobs or folders to include, e.g. ["web-schedule", "Deploys/web"]; blank = every job built recently
+exclude = []              # skip jobs whose names contain any of these
+days = 14
+deploy_jobs = []          # name patterns for deploy jobs, e.g. ["deploy-*"]; blank = names with "deploy" or "release"
+env_params = ["ENVIRONMENT", "ENV", "TARGET_ENV", "DEPLOY_ENV", "TARGET", "STAGE"]   # build parameters naming the environment
+alert_failures = true     # a default-branch job breaks (see [code_health] ci_branches)
+fetch_tests = true        # read JUnit test reports for flaky-test detection
+ca_bundle = ""            # path to your company's CA certificate, if Jenkins uses an internal one
+
+# Monthly and sprint-review reports to your private Teams chat (also on the Insights tab any time).
+[reports]
+monthly = true            # last month's report on the first workday of the month
+sprint_review = true      # when a sprint closes
+time = "09:00"
+
 [dashboard]
 host = "127.0.0.1"        # this computer only
 port = 8765

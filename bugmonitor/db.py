@@ -136,6 +136,28 @@ CREATE TABLE IF NOT EXISTS security_alerts (
     id TEXT PRIMARY KEY, repo TEXT, kind TEXT, number INTEGER, severity TEXT, state TEXT, package TEXT,
     summary TEXT, cve TEXT, ghsa TEXT, url TEXT, created TEXT, updated TEXT, jira_keys TEXT
 );
+CREATE TABLE IF NOT EXISTS jenkins_builds (
+    id TEXT PRIMARY KEY,             -- job full name + "#" + number
+    job TEXT, job_url TEXT, branch TEXT, number INTEGER, result TEXT, building INTEGER, started TEXT,
+    duration_s REAL, url TEXT, triggered_by TEXT, causes TEXT, sha TEXT, repo TEXT, changes TEXT, tickets TEXT,
+    stages TEXT, tests TEXT, is_deploy INTEGER DEFAULT 0, environment TEXT, parameters TEXT, pipeline TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_jenkins_job ON jenkins_builds(job, number);
+CREATE TABLE IF NOT EXISTS test_runs (       -- one row per build with a test report
+    build_id TEXT PRIMARY KEY, source TEXT, pipeline TEXT, sha TEXT, ts TEXT, url TEXT,
+    total INTEGER, failed INTEGER, skipped INTEGER,
+    branch TEXT,                    -- flips are counted per branch; same-commit checks across branches
+    result TEXT                     -- the build's result; aborted runs never count as a pass
+);
+CREATE INDEX IF NOT EXISTS ix_test_runs ON test_runs(pipeline, ts);
+CREATE TABLE IF NOT EXISTS test_failures (   -- only failing tests are kept; a missing row means it passed
+    build_id TEXT, test TEXT, error TEXT, PRIMARY KEY (build_id, test)
+);
+CREATE INDEX IF NOT EXISTS ix_test_failures ON test_failures(test);
+CREATE TABLE IF NOT EXISTS release_notes (   -- drafted when a production deploy succeeds
+    deployment_id TEXT PRIMARY KEY, created TEXT, repo TEXT, environment TEXT, title TEXT, text TEXT,
+    tickets INTEGER, not_done TEXT
+);
 CREATE TABLE IF NOT EXISTS github_branches (
     repo TEXT, name TEXT, sha TEXT, committed TEXT, message TEXT, checks TEXT,
     pr_number INTEGER, pr_state TEXT, pr_url TEXT, jira_keys TEXT, url TEXT,
@@ -207,7 +229,8 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     d = dict(row)
     for k in ("components", "labels", "channels", "relations", "jira_keys", "pending_reviewers",
               "details", "sprint_ids", "fix_versions", "mentions", "statuses", "tickets",
-              "prs", "authors", "progress", "affects_versions"):
+              "prs", "authors", "progress", "affects_versions", "causes", "changes",
+              "stages", "tests", "parameters", "not_done"):
         if k in d and isinstance(d[k], str):
             try:
                 d[k] = json.loads(d[k])

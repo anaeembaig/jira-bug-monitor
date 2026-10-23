@@ -166,6 +166,32 @@ class GitHubClient:
         return (self.rest(f"/repos/{repo}/actions/runs", {"per_page": 60, "branch": branch, "created": f">={since}"})
                 .get("workflow_runs") or [])
 
+    def run_artifacts(self, repo: str, run_id: int) -> list[dict]:
+        return self.rest(f"/repos/{repo}/actions/runs/{run_id}/artifacts", {"per_page": 50}).get("artifacts") or []
+
+    def download_artifact(self, url: str, max_bytes: int) -> bytes | None:
+        """Artifact zip. GitHub redirects to storage; requests drops the token on the cross-host redirect."""
+        with self.s.get(url, timeout=60, stream=True) as r:
+            if not r.ok:
+                return None
+            data = bytearray()
+            for chunk in r.iter_content(65536):
+                data += chunk
+                if len(data) > max_bytes:
+                    return None
+            return bytes(data)
+
+    def branch_checks(self, repo: str, branch: str) -> dict:
+        """Check runs and commit statuses on the head of a branch (Jenkins usually reports as a status)."""
+        runs = self.rest(f"/repos/{repo}/commits/{branch}/check-runs", {"per_page": 100}).get("check_runs") or []
+        status = self.rest(f"/repos/{repo}/commits/{branch}/status") or {}
+        return {"sha": status.get("sha") or (runs[0].get("head_sha") if runs else None),
+                "checks": [{"name": c.get("name"), "state": (c.get("conclusion") or c.get("status") or "").lower(),
+                            "app": (c.get("app") or {}).get("name"), "url": c.get("html_url"),
+                            "at": c.get("completed_at") or c.get("started_at")} for c in runs]
+                          + [{"name": st.get("context"), "state": (st.get("state") or "").lower(), "app": "status",
+                              "url": st.get("target_url"), "at": st.get("updated_at")} for st in status.get("statuses") or []]}
+
     def default_branch(self, repo: str) -> str | None:
         return (self.rest(f"/repos/{repo}") or {}).get("default_branch")
 
