@@ -1,0 +1,195 @@
+"""Read and change settings from the dashboard. Secrets never leave this module in clear text."""
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from pathlib import Path
+
+from . import vault
+from .config import Settings, load_settings
+from .db import now_iso
+from .notify_setup import _toml_value, set_config_values
+
+# Simple settings the dashboard may change: section -> {key: type}
+EDITABLE = {
+    "alerts": {"new_bug": bool, "priority_raised": bool, "reopened": bool, "assigned_to_me": bool,
+               "my_status_changes": bool, "mentions": bool, "stuck_reminders": bool, "desktop": bool,
+               "external_min_priority": str},
+    "notify": {"quiet_hours": str, "quiet_weekends": bool, "urgent_bypasses_quiet": bool, "digest_time": str,
+               "digest_personal": bool, "digest_team": bool, "weekly_report_day": str, "sync_health": bool},
+    "timelog": {"enabled": bool, "daily_target_hours": float, "reminder_time": str, "recap_in_digest": bool,
+                "workdays": list, "allow_jira_write": bool},
+    "deployments": {"alert_my_tickets": bool, "alert_failures": bool, "alert_rollbacks": bool},
+    "team": {"name": str, "pr_review_hours": float},
+    "github": {"alerts_to_external": bool},
+}
+TIME_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]{1,40}$")
+
+
+def public(settings: Settings) -> dict:
+    """Everything the Settings tab shows. Webhook URLs and tokens are reduced to 'set' or 'not set'."""
+    section = {"alerts": settings.alerts, "notify": settings.notify, "timelog": settings.timelog,
+               "deployments": settings.deploy, "team": settings.team, "github": settings.github}
+    values = {s: {k: getattr(obj, k) for k in EDITABLE[s]} for s, obj in section.items()}
+    return {
+        "values": values,
+        "routes": [{"name": r.name, "projects": r.projects, "events": r.events, "min_priority": r.min_priority,
+                    "digest": r.digest, "mention_assignee": r.mention_assignee, "webhook_set": bool(r.webhook)}
+                   for r in settings.routes],
+        "members": settings.team.members,
+        "escalations": [{"name": e.name, "min_priority": e.min_priority, "unassigned_hours": e.unassigned_hours,
+                         "open_hours": e.open_hours, "projects": e.projects, "route": e.route}
+                        for e in settings.escalations],
+        "secrets": {k: bool(v) for k, v in settings.secret_sources.items()},
+        "private_webhook_set": bool(settings.alerts.teams_webhook),
+        "priorities": settings.priority_order,
+        "events": ["new_bug", "priority_raised", "reopened", "escalation", "stuck", "deployment"],
+        "config_file": str(settings.config_file),
+    }
+
+
+def _coerce(kind, v):
+    if kind is bool:
+        return bool(v)
+    if kind is float:
+        f = float(v)
+        if not 0 <= f <= 1000:
+            raise ValueError("number out of range")
+        return f
+    if kind is list:
+        return [str(x)[:20] for x in (v or [])][:7]
+    return str(v or "")[:200]
+
+
+def _validate(section: str, key: str, value):
+    if key in ("digest_time", "reminder_time") and value and not TIME_RE.match(value):
+        raise ValueError(f"{key} must look like 09:30")
+    if key == "quiet_hours" and value:
+        parts = value.split("-")
+        if len(parts) != 2 or not all(TIME_RE.match(p.strip()) for p in parts):
+            raise ValueError("quiet_hours must look like 20:00-08:00")
+
+
+def _replace_table_array(path: Path, name: str, items: list[dict]) -> None:
+    """Rewrite every [[name]] block (keeps everything else in the file, including comments)."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out, skipping = [], False
+    for line in lines:
+        st = line.strip()
+        if st == f"[[{name}]]":
+            skipping = True
+            continue
+        if skipping and st.startswith("[") and st != f"[[{name}]]":
+            skipping = False
+        if not skipping:
+            out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    for item in items:
+        out += ["", f"[[{name}]]"] + [f"{k} = {_toml_value(v)}" for k, v in item.items() if v is not None]
+    text = "\n".join(out) + "\n"
+    tomllib.loads(text)  # never write invalid TOML
+    path.write_text(text, encoding="utf-8")
+
+
+def save(conn, settings: Settings, body: dict) -> dict:
+    path = settings.config_file
+    if not path or not path.exists():
+        return {"error": "No settings file found. Run bugmonitor init first."}
+    changed: list[str] = []
+    original = path.read_text(encoding="utf-8")
+    try:
+        updates: dict = {}
+        for section, kv in (body.get("values") or {}).items():
+            allowed = EDITABLE.get(section, {})
+            for key, value in (kv or {}).items():
+                if key not in allowed:
+                    continue
+                v = _coerce(allowed[key], value)
+                _validate(section, key, v)
+                updates.setdefault(section, {})[key] = v
+        if updates:
+            changed += set_config_values(path, updates)
+
+        if "private_webhook" in body and body["private_webhook"]:
+            if vault.set_secret("teams_webhook", body["private_webhook"].strip()):
+                set_config_values(path, {"alerts": {"teams_webhook": ""}})
+            else:
+                set_config_values(path, {"alerts": {"teams_webhook": body["private_webhook"].strip()}})
+            changed.append("private Teams webhook")
+
+        if "routes" in body:
+            items = []
+            existing = {r.name: r for r in settings.routes}
+            for r in body["routes"]:
+                name = (r.get("name") or "").strip()
+                if not NAME_RE.match(name):
+                    raise ValueError(f"Route name '{name}' must be 1-40 letters, numbers, spaces, - _ .")
+                hook = (r.get("webhook") or "").strip()
+                if hook and not hook.startswith("https://"):
+                    raise ValueError(f"Route '{name}': the webhook must start with https://")
+                ref = f"keychain:route-{name}"
+                if hook:
+                    if not vault.set_secret(f"route-{name}", hook):
+                        ref = hook  # no credential store: keep it in the file
+                elif name in existing and existing[name].webhook:
+                    old = _raw_route_webhook(path, name)
+                    ref = old or ref
+                else:
+                    raise ValueError(f"Route '{name}' needs a webhook URL")
+                items.append({"name": name, "webhook": ref,
+                              "projects": [p.strip().upper() for p in r.get("projects") or [] if p.strip()],
+                              "events": [e for e in r.get("events") or [] if e in public(settings)["events"]],
+                              "min_priority": r.get("min_priority") or "", "digest": bool(r.get("digest")),
+                              "mention_assignee": bool(r.get("mention_assignee", True))})
+            _replace_table_array(path, "routes", items)
+            changed.append(f"{len(items)} team channel(s)")
+
+        if "members" in body:
+            members = [{"name": (m.get("name") or "").strip()[:80], "github": (m.get("github") or "").strip()[:40],
+                        "email": (m.get("email") or "").strip()[:120]} for m in body["members"] if (m.get("name") or "").strip()]
+            _replace_table_array(path, "team.members", members)
+            changed.append(f"{len(members)} teammate(s)")
+
+        if "escalations" in body:
+            esc = [{"name": (e.get("name") or "Escalation").strip()[:60], "min_priority": e.get("min_priority") or "Critical",
+                    "unassigned_hours": float(e.get("unassigned_hours") or 0), "open_hours": float(e.get("open_hours") or 0),
+                    "projects": [p.strip().upper() for p in e.get("projects") or [] if p.strip()],
+                    "route": (e.get("route") or "").strip()} for e in body["escalations"]]
+            _replace_table_array(path, "escalations", esc)
+            changed.append(f"{len(esc)} escalation rule(s)")
+    except (ValueError, TypeError, tomllib.TOMLDecodeError) as e:
+        path.write_text(original, encoding="utf-8")   # all or nothing
+        return {"error": str(e)}
+
+    reload_into(settings)
+    conn.execute("INSERT INTO audit(ts, actor, action, detail) VALUES(?,?,?,?)",
+                 (now_iso(), "dashboard", "settings", json.dumps(changed)[:1000]))
+    conn.commit()
+    return {"ok": True, "changed": changed, "settings": public(settings)}
+
+
+def _raw_route_webhook(path: Path, name: str) -> str:
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    return next((r.get("webhook", "") for r in raw.get("routes", []) if r.get("name") == name), "")
+
+
+def reload_into(settings: Settings) -> None:
+    """Apply saved changes to the running app (poller and dashboard share this object)."""
+    fresh = load_settings(settings.config_file)
+    settings.__dict__.update(fresh.__dict__)
+
+
+def test_route(settings: Settings, name: str) -> dict:
+    from .alerts import Alerter, summary_card
+    from .db import connect
+    r = settings.route(name)
+    if not r or not r.webhook:
+        return {"error": f"No webhook for '{name}'"}
+    card = summary_card(f"Bug Monitor is connected to {name}",
+                        [(f"This channel will get: {', '.join(r.events)}", f"Projects: {', '.join(r.projects) or 'all'}", None)],
+                        settings.dashboard, "Good")
+    ok = Alerter(settings, connect(settings.db_path)).post_card(r.webhook, card)
+    return {"ok": ok} if ok else {"error": "Teams didn't accept the message. Check the webhook URL."}

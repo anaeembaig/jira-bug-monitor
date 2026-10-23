@@ -189,6 +189,17 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
 .act{display:flex;flex-wrap:wrap;gap:4px}
 .low{color:var(--serious-ink);font-weight:600}
 
+/* ---------- settings */
+.form{display:grid;gap:10px}
+.frow{display:grid;grid-template-columns:minmax(180px,260px) 1fr;gap:12px;align-items:center;font-size:13px}
+.frow .help{grid-column:2;color:var(--ink-3);font-size:12px;margin-top:-6px}
+.form input[type=text],.form input[type=number],.form input[type=url],.form select{background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:6px 10px;font-size:13px;max-width:360px;width:100%}
+.form input[type=checkbox]{width:16px;height:16px}
+.rowcard{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px;position:relative}
+.rowcard .x{position:absolute;top:8px;right:8px}
+.save-bar{position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:10px;align-items:center;justify-content:flex-end;z-index:5}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+
 /* ---------- drawer */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .15s;z-index:30}
 .scrim.on{opacity:1;pointer-events:auto}
@@ -224,6 +235,8 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <button class="tab" role="tab" data-view="activity">Activity <span class="count num" id="c-alerts">0</span></button>
     </nav>
     <div class="top-right">
+      <button class="btn icon" id="settings-btn" title="Settings" aria-label="Settings" data-goto="settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
       <span class="sync" id="sync"><span class="dot"></span><span id="sync-t">Loading…</span></span>
       <button class="btn" id="sync-btn" title="Pull from Jira and GitHub now">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg><span>Sync</span></button>
@@ -290,6 +303,12 @@ tbody tr{cursor:pointer}tbody tr:hover td{background:var(--surface-2)}
       <button data-v="all" aria-pressed="true">All</button><button data-v="mine" aria-pressed="false">My tickets</button>
       <button data-v="prod" aria-pressed="false">Production</button><button data-v="failed" aria-pressed="false">Failed and rollbacks</button></div></div>
     <div id="dep-body"></div>
+  </section>
+
+  <!-- ================= SETTINGS ================= -->
+  <section class="view" id="v-settings">
+    <div class="h-row"><h2>Settings</h2><span class="sub" id="set-file"></span></div>
+    <div id="set-body"></div>
   </section>
 
   <!-- ================= BUGS ================= -->
@@ -631,6 +650,124 @@ async function renderTeam() {
         <td>${esc((i.waiting_on || []).join(", ")) || '<span class="muted">—</span>'}</td></tr>`).join("") || '<tr><td colspan="6" class="empty">Nothing stuck. Nice.</td></tr>'}
       </tbody></table></div>`;
   }
+}
+
+/* ---------------------------------------------------------------- settings */
+let SET = null;
+const LABELS = {
+  alerts: {new_bug: "New bugs", priority_raised: "Priority goes up", reopened: "Bug reopened", assigned_to_me: "Ticket assigned to you",
+    my_status_changes: "Your ticket changes status", mentions: "You're @mentioned in Jira", stuck_reminders: "Your work is stuck",
+    desktop: "Desktop pop-ups", external_min_priority: "Lowest priority for new-bug messages"},
+  github: {alerts_to_external: "Pull request alerts (reviews, comments, checks, merges)"},
+  deployments: {alert_my_tickets: "Your tickets get deployed", alert_failures: "Deploys fail", alert_rollbacks: "Rollbacks"},
+  notify: {quiet_hours: "Quiet hours", quiet_weekends: "Quiet on weekends", urgent_bypasses_quiet: "Urgent alerts ignore quiet hours",
+    digest_time: "Daily summary time", digest_personal: "Send me a daily summary", digest_team: "Send the team a daily summary",
+    weekly_report_day: "Weekly report day", sync_health: "Tell me when syncing keeps failing"},
+  timelog: {enabled: "Time log", daily_target_hours: "Daily target (hours)", reminder_time: "End-of-day reminder",
+    recap_in_digest: "Yesterday's hours in the daily summary", workdays: "Workdays", allow_jira_write: "Allow logging time to Jira from here"},
+  team: {name: "Team name", pr_review_hours: "PR review limit (hours)"},
+};
+const HELP = {quiet_hours: "e.g. 20:00-08:00. Held messages arrive as one summary afterward.", digest_time: "e.g. 09:30. Blank turns it off.",
+  reminder_time: "e.g. 17:30. Sent when you've logged less than your target.", weekly_report_day: "e.g. Friday. Blank turns it off."};
+const SECTIONS = [["Your notifications", "alerts"], ["Pull requests", "github"], ["Deployments", "deployments"], ["Timing and summaries", "notify"],
+  ["Time log", "timelog"], ["Team", "team"]];
+const DAYS7 = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function field(sec, key, v) {
+  const id = `f-${sec}-${key}`, label = (LABELS[sec] || {})[key] || key;
+  let input;
+  if (typeof v === "boolean") input = `<input type="checkbox" id="${id}" ${v ? "checked" : ""}>`;
+  else if (key === "external_min_priority") input = `<select id="${id}">${SET.priorities.map(p => `<option ${p === v ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
+  else if (key === "workdays") input = `<span class="chips">${DAYS7.map(d => `<label class="chip"><input type="checkbox" data-day="${d}" ${(v || []).map(x => x.slice(0, 3).toLowerCase()).includes(d.toLowerCase()) ? "checked" : ""}> ${d}</label>`).join("")}</span>`;
+  else if (typeof v === "number") input = `<input type="number" step="0.5" min="0" id="${id}" value="${v}">`;
+  else input = `<input type="text" id="${id}" value="${esc(v ?? "")}">`;
+  return `<label class="frow" ${key === "workdays" ? `id="${id}"` : ""}><span>${esc(label)}</span>${input}</label>${HELP[key] ? `<div class="frow"><span></span><span class="help">${HELP[key]}</span></div>` : ""}`;
+}
+
+function routeCard(r, i) {
+  return `<div class="rowcard" data-route="${i}"><button class="btn x" data-del-route="${i}">Remove</button>
+    <label class="frow"><span>Channel name</span><input type="text" data-k="name" value="${esc(r.name || "")}"></label>
+    <label class="frow"><span>Webhook URL</span><input type="url" data-k="webhook" placeholder="${r.webhook_set ? "Saved (paste a new one to replace)" : "https://..."}"></label>
+    <label class="frow"><span>Projects</span><input type="text" data-k="projects" value="${esc((r.projects || []).join(", "))}" placeholder="blank = all"></label>
+    <div class="frow"><span>Events</span><span class="chips">${SET.events.map(e => `<label class="chip"><input type="checkbox" data-ev="${e}" ${(r.events || []).includes(e) ? "checked" : ""}> ${e.replace("_", " ")}</label>`).join("")}</span></div>
+    <label class="frow"><span>Lowest priority</span><select data-k="min_priority"><option value="">Same as yours</option>${SET.priorities.map(p => `<option ${p === r.min_priority ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
+    <label class="frow"><span>Daily team summary here</span><input type="checkbox" data-k="digest" ${r.digest ? "checked" : ""}></label>
+    <label class="frow"><span>@mention the assignee</span><input type="checkbox" data-k="mention_assignee" ${r.mention_assignee !== false ? "checked" : ""}></label>
+    ${r.webhook_set ? `<div><button class="btn" data-test-route="${esc(r.name)}">Send test message</button></div>` : ""}</div>`;
+}
+const memberRow = (m, i) => `<div class="rowcard" data-member="${i}" style="grid-template-columns:1fr 1fr 1fr auto;align-items:center">
+  <input type="text" data-k="name" placeholder="Jira display name" value="${esc(m.name || "")}"><input type="text" data-k="github" placeholder="GitHub login" value="${esc(m.github || "")}">
+  <input type="text" data-k="email" placeholder="Email (for Teams @mentions)" value="${esc(m.email || "")}"><button class="btn" data-del-member="${i}">Remove</button></div>`;
+const escRow = (e, i) => `<div class="rowcard" data-esc="${i}"><button class="btn x" data-del-esc="${i}">Remove</button>
+  <label class="frow"><span>Rule name</span><input type="text" data-k="name" value="${esc(e.name || "")}"></label>
+  <label class="frow"><span>Priority at or above</span><select data-k="min_priority">${SET.priorities.map(p => `<option ${p === e.min_priority ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
+  <label class="frow"><span>Unassigned for (hours)</span><input type="number" min="0" data-k="unassigned_hours" value="${e.unassigned_hours || 0}"></label>
+  <label class="frow"><span>Open for (hours)</span><input type="number" min="0" data-k="open_hours" value="${e.open_hours || 0}"></label>
+  <label class="frow"><span>Projects</span><input type="text" data-k="projects" value="${esc((e.projects || []).join(", "))}" placeholder="blank = all"></label>
+  <label class="frow"><span>Send to</span><select data-k="route"><option value="">Me only</option>${SET.routes.map(r => `<option ${r.name === e.route ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label></div>`;
+
+async function renderSettings() {
+  SET = await j("/api/settings");
+  $("#set-file").textContent = SET.config_file;
+  $("#set-body").innerHTML = `
+    <div class="grid two">${SECTIONS.map(([title, sec]) => `<div class="card"><div class="card-h"><h3>${title}</h3></div>
+      <div class="card-b form">${Object.entries(SET.values[sec]).map(([k, v]) => field(sec, k, v)).join("")}
+      ${sec === "alerts" ? `<label class="frow"><span>Your private Teams webhook</span><input type="url" id="f-private" placeholder="${SET.private_webhook_set ? "Saved (paste a new one to replace)" : "https://..."}"></label>
+        <div class="frow"><span></span><span><button class="btn" id="test-private">Send me a test message</button></span></div>` : ""}</div></div>`).join("")}</div>
+    <div class="card mt"><div class="card-h"><h3>Team Teams channels</h3><button class="btn" id="add-route">Add channel</button></div>
+      <div class="card-b"><p class="sub" style="margin-top:0">In the channel: Workflows, then "Post to a channel when a webhook request is received". Webhook URLs are kept in your credential store.</p>
+      <div class="form" id="routes">${SET.routes.map(routeCard).join("") || '<div class="muted">No channels yet.</div>'}</div></div></div>
+    <div class="card mt"><div class="card-h"><h3>Teammates</h3><button class="btn" id="add-member">Add teammate</button></div>
+      <div class="card-b form" id="members">${SET.members.map(memberRow).join("") || '<div class="muted">No teammates yet.</div>'}</div></div>
+    <div class="card mt"><div class="card-h"><h3>Escalation rules</h3><button class="btn" id="add-esc">Add rule</button></div>
+      <div class="card-b form" id="escs">${SET.escalations.map(escRow).join("") || '<div class="muted">No rules yet. Example: Critical bug unassigned for 2 hours.</div>'}</div></div>
+    <div class="save-bar"><span class="sub" id="save-msg"></span><button class="btn primary" id="save-settings">Save settings</button></div>`;
+}
+
+function collectSettings() {
+  const values = {};
+  for (const [, sec] of SECTIONS) {
+    values[sec] = {};
+    for (const [k, v] of Object.entries(SET.values[sec])) {
+      const el = $(`#f-${sec}-${k}`);
+      if (k === "workdays") values[sec][k] = [...el.querySelectorAll("[data-day]")].filter(c => c.checked).map(c => c.dataset.day);
+      else if (typeof v === "boolean") values[sec][k] = el.checked;
+      else if (typeof v === "number") values[sec][k] = +el.value;
+      else values[sec][k] = el.value.trim();
+    }
+  }
+  const list = s => (s || "").split(",").map(x => x.trim()).filter(Boolean);
+  const routes = [...document.querySelectorAll("[data-route]")].map(c => ({
+    name: c.querySelector('[data-k="name"]').value.trim(), webhook: c.querySelector('[data-k="webhook"]').value.trim(),
+    projects: list(c.querySelector('[data-k="projects"]').value), events: [...c.querySelectorAll("[data-ev]")].filter(x => x.checked).map(x => x.dataset.ev),
+    min_priority: c.querySelector('[data-k="min_priority"]').value, digest: c.querySelector('[data-k="digest"]').checked,
+    mention_assignee: c.querySelector('[data-k="mention_assignee"]').checked}));
+  const members = [...document.querySelectorAll("[data-member]")].map(c => Object.fromEntries(["name", "github", "email"].map(k => [k, c.querySelector(`[data-k="${k}"]`).value.trim()])));
+  const escalations = [...document.querySelectorAll("[data-esc]")].map(c => ({name: c.querySelector('[data-k="name"]').value.trim(),
+    min_priority: c.querySelector('[data-k="min_priority"]').value, unassigned_hours: +c.querySelector('[data-k="unassigned_hours"]').value,
+    open_hours: +c.querySelector('[data-k="open_hours"]').value, projects: list(c.querySelector('[data-k="projects"]').value), route: c.querySelector('[data-k="route"]').value}));
+  const body = {values, routes, members, escalations};
+  const pw = $("#f-private").value.trim(); if (pw) body.private_webhook = pw;
+  return body;
+}
+
+async function settingsClick(ev) {
+  if (ev.target.id === "save-settings") {
+    const r = await j("/api/settings", {method: "POST", body: JSON.stringify(collectSettings())});
+    if (r.error) { $("#save-msg").innerHTML = `<span style="color:var(--critical-ink)">${esc(r.error)}</span>`; return true; }
+    await renderSettings(); $("#save-msg").textContent = "Saved. Changes apply right away."; refresh(); return true;
+  }
+  if (ev.target.id === "test-private") { const r = await j("/api/settings/test-private", {method: "POST", body: "{}"}); alert(r.message); return true; }
+  const tr = ev.target.closest("[data-test-route]");
+  if (tr) { const r = await j("/api/settings/test-route", {method: "POST", body: JSON.stringify({name: tr.dataset.testRoute})}); alert(r.ok ? "Sent. Check the channel." : r.error); return true; }
+  if (ev.target.id === "add-route") { SET.routes.push({events: ["new_bug", "escalation", "stuck", "deployment"], mention_assignee: true}); $("#routes").innerHTML = SET.routes.map(routeCard).join(""); return true; }
+  if (ev.target.id === "add-member") { SET.members.push({}); $("#members").innerHTML = SET.members.map(memberRow).join(""); return true; }
+  if (ev.target.id === "add-esc") { SET.escalations.push({min_priority: "Critical", unassigned_hours: 2}); $("#escs").innerHTML = SET.escalations.map(escRow).join(""); return true; }
+  for (const [attr, key, el, fn] of [["data-del-route", "routes", "#routes", routeCard], ["data-del-member", "members", "#members", memberRow], ["data-del-esc", "escalations", "#escs", escRow]]) {
+    const b = ev.target.closest(`[${attr}]`);
+    if (b) { SET[key].splice(+b.getAttribute(attr), 1); $(el).innerHTML = SET[key].map(fn).join(""); return true; }
+  }
+  return false;
 }
 
 /* ---------------------------------------------------------------- deployments */
@@ -1069,15 +1206,18 @@ async function refresh() {
 function show(v) {
   view = v; store.set("bm-view", v);
   document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", t.dataset.view === v));
+  $("#settings-btn").setAttribute("aria-pressed", v === "settings");
   document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === "v-" + v));
   if (v === "overview") renderOverview();
   if (v === "activity") renderActivity();
   if (v === "team") renderTeam();
   if (v === "time") renderTime();
   if (v === "deploys") renderDeploys();
+  if (v === "settings") renderSettings();
 }
 
 document.addEventListener("click", async ev => {
+  if (view === "settings" && ev.target.closest("#v-settings") && await settingsClick(ev)) return;
   const lt = ev.target.closest("[data-logtime]");
   if (lt) {
     ev.stopPropagation();

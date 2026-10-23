@@ -69,6 +69,9 @@ def make_handler(settings: Settings):
                 if m:
                     from . import team
                     return self._json(getattr(team, m.group(1))(conn, settings))
+                if u.path == "/api/settings":
+                    from .settings_api import public
+                    return self._json(public(settings))
                 if u.path == "/api/config":
                     return self._json(_public_config(settings))
                 if u.path == "/api/deployments":
@@ -127,6 +130,15 @@ def make_handler(settings: Settings):
                 return self._json({"error": "forbidden"}, 403)
             conn = connect(settings.db_path)
             try:
+                if u.path == "/api/settings":
+                    from .settings_api import save
+                    return self._json(save(conn, settings, self._body()))
+                if u.path == "/api/settings/test-route":
+                    from .settings_api import test_route
+                    return self._json(test_route(settings, self._body().get("name", "")))
+                if u.path == "/api/settings/test-private":
+                    from .notify_setup import preview
+                    return self._json({"message": preview(settings)})
                 if u.path == "/api/timelog/log":
                     from .jira_client import JiraClient
                     from .timelog import log_to_jira
