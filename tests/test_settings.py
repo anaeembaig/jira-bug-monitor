@@ -89,3 +89,72 @@ def test_partial_failure_rolls_back(env):
     out = settings_api.save(conn, s, {"values": {"alerts": {"mentions": False}},
                                       "routes": [{"name": "x", "webhook": "http://insecure"}]})
     assert "https://" in out["error"] and cfg.read_text() == before and s.alerts.mentions is True
+
+
+TRICKY = """# top comment
+[alerts]  # my alerts
+desktop = true   # pop-ups
+external_min_priority = "Normal"
+
+[timelog]
+workdays = [
+  "Mon",
+  "Tue",
+]
+
+[team]
+name = "Web"
+members = [{name = "Inline Person"}]
+
+[[routes]]   # front-end channel
+name = "fe"
+webhook = "https://fe"
+events = ["new_bug"]
+
+# [[escalations]]
+# name = "template kept as a comment"
+
+[dashboard]
+port = 8765
+"""
+
+
+def test_tricky_configs_are_preserved(tmp_path, _isolated_secrets, monkeypatch):
+    """Regression: multi-line arrays, inline tables, header comments, emoji, repeated saves."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(TRICKY)
+    monkeypatch.setenv("BUGMON_DB", str(tmp_path / "x.db"))
+    s = load_settings(cfg)
+    conn = connect(s.db_path)
+    body = {"values": {"alerts": {"desktop": False}, "timelog": {"workdays": ["Mon", "Wed"]},
+                       "team": {"name": "Web 🚀 team"}},
+            "routes": [{"name": "fe", "webhook": "", "events": ["new_bug", "deployment"]}],
+            "members": [{"name": "Sam Lee", "github": "sam", "email": ""}]}
+    for _ in range(3):                                   # saving repeatedly never duplicates anything
+        out = settings_api.save(conn, s, body)
+        assert out.get("ok"), out
+    text = cfg.read_text()
+    data = tomllib.loads(text)
+    assert len(data["routes"]) == 1 and data["routes"][0]["webhook"] == "https://fe"
+    assert data["team"]["members"] == [{"name": "Sam Lee", "github": "sam", "email": ""}]
+    assert data["timelog"]["workdays"] == ["Mon", "Wed"] and data["team"]["name"] == "Web 🚀 team"
+    assert data["alerts"]["desktop"] is False and text.count("[alerts]") == 1
+    for kept in ("# top comment", "# my alerts", "# pop-ups", "# [[escalations]]", "template kept as a comment"):
+        assert kept in text, kept
+
+
+def test_example_template_survives_settings_save(tmp_path, _isolated_secrets, monkeypatch):
+    from bugmonitor.config import Path as _P
+    import bugmonitor
+    template = (_P(bugmonitor.__file__).parent / "config.example.toml").read_text()
+    template = template.replace('# [[team.members]]\n# name = "Jira display name"', '[[team.members]]\nname = "Real Person"')
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(template)
+    monkeypatch.setenv("BUGMON_DB", str(tmp_path / "y.db"))
+    s = load_settings(cfg)
+    out = settings_api.save(connect(s.db_path), s, {"members": [{"name": "A"}, {"name": "B"}],
+                                                     "values": {"notify": {"digest_time": "09:30"}}})
+    assert out.get("ok"), out
+    text = cfg.read_text()
+    assert "# [[routes]]" in text and "# [[escalations]]" in text and "[timelog]" in text
+    assert [m["name"] for m in tomllib.loads(text)["team"]["members"]] == ["A", "B"]

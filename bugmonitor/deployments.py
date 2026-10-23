@@ -97,9 +97,13 @@ def _what_shipped(conn, client, repo: str, base: str | None, head: str, prefixes
         return {"commits": 0, "tickets": [], "prs": [], "authors": [], "rollback": False, "identical": base == head}
     try:
         cmp_ = client.compare(repo, base, head)
+        rollback = cmp_.get("status") == "behind"
+        if rollback:
+            # Going back in history: the commits that were taken OUT are base's lead over head.
+            cmp_ = client.compare(repo, head, base)
     except Exception as e:
         log.warning("Compare %s %s...%s failed: %s", repo, base[:7], head[:7], e)
-        return {"commits": None, "tickets": [], "prs": [], "authors": [], "rollback": False}
+        return {"commits": None, "tickets": None, "prs": [], "authors": [], "rollback": False}
     commits = cmp_.get("commits") or []
     keys, prs, authors = [], [], []
     pr_rows = {r["number"]: r for r in conn.execute("SELECT number, jira_keys, title FROM github_prs WHERE repo=?", (repo,))}
@@ -118,8 +122,12 @@ def _what_shipped(conn, client, repo: str, base: str | None, head: str, prefixes
         who = (c.get("author") or {}).get("login") or ((c.get("commit") or {}).get("author") or {}).get("name")
         if who and who not in authors:
             authors.append(who)
+    # For a rollback, tickets/prs/commits are what was REMOVED from the environment.
     return {"commits": cmp_.get("total_commits", len(commits)), "tickets": keys, "prs": prs, "authors": authors,
-            "rollback": cmp_.get("status") == "behind"}
+            "rollback": rollback}
+
+
+COMPARE_RETRIES = 3
 
 
 def _upsert_deployment(conn, settings, client, alerter, repo, n, prefixes, quiet) -> int:
@@ -141,6 +149,12 @@ def _upsert_deployment(conn, settings, client, alerter, repo, n, prefixes, quiet
             (repo, env, n["createdAt"])).fetchone()
         shipped = _what_shipped(conn, client, repo, prev["sha"] if prev else None, n.get("commitOid") or "", prefixes)
         shipped["previous_sha"] = prev["sha"] if prev else None
+        if shipped["tickets"] is None:
+            # Compare failed: leave tickets unknown (NULL) so the next sync retries, a few times.
+            tries = int(get_state(conn, f"deploy_retry:{n['id']}") or 0) + 1
+            set_state(conn, f"deploy_retry:{n['id']}", str(tries))
+            if tries >= COMPARE_RETRIES:
+                shipped["tickets"] = []
     last_log = next((s["log_url"] for s in reversed(sts) if s["log_url"]), None)
     last_env = next((s["environment_url"] for s in reversed(sts) if s["environment_url"]), None)
     conn.execute(
@@ -150,11 +164,15 @@ def _upsert_deployment(conn, settings, client, alerter, repo, n, prefixes, quiet
         (n["id"], repo, env, n.get("commitOid"), latest, n.get("createdAt"), n.get("updatedAt"),
          f"https://github.com/{repo}/deployments/{n.get('environment')}", (n.get("creator") or {}).get("login"),
          (n.get("ref") or {}).get("name"), n.get("description"), json.dumps(sts), last_log, last_env,
-         shipped["commits"], json.dumps(shipped["tickets"]), json.dumps(shipped["prs"]), json.dumps(shipped["authors"]),
+         shipped["commits"], None if shipped["tickets"] is None else json.dumps(shipped["tickets"]),
+         json.dumps(shipped["prs"]), json.dumps(shipped["authors"]),
          shipped["previous_sha"], int(bool(shipped["rollback"])),
          (finished - started).total_seconds() if finished and started else None))
     conn.commit()
-    if quiet or (old and old["state"] == latest):
+    if quiet or shipped["tickets"] is None:
+        return 0          # alert once we know what's in it
+    newly_known = bool(old) and old.get("tickets") is None
+    if old and old["state"] == latest and not newly_known:
         return 0
     return _alert(conn, settings, alerter, repo, env, n, latest, shipped, last_log or last_env)
 
@@ -270,13 +288,22 @@ def for_ticket(conn, key: str) -> list[dict]:
 
 
 def environments_for_tickets(conn) -> dict[str, list[str]]:
-    """Jira key -> environments it has been deployed to successfully."""
-    out: dict = {}
-    for r in conn.execute("SELECT environment, tickets FROM deployments WHERE kind='deployment' "
-                          "AND state IN ('SUCCESS','ACTIVE','INACTIVE')"):
+    """Jira key -> environments it's currently deployed to. Replays deploys oldest first, so a
+    rollback takes its tickets back out of that environment."""
+    where: dict = {}
+    for r in conn.execute("SELECT repo, environment, tickets, rollback FROM deployments WHERE kind='deployment' "
+                          "AND state IN ('SUCCESS','ACTIVE','INACTIVE') ORDER BY created"):
+        place = (r["repo"], r["environment"])
         for k in json.loads(r["tickets"] or "[]"):
-            if r["environment"] not in out.setdefault(k, []):
-                out[k].append(r["environment"])
+            if r["rollback"]:
+                where.get(k, set()).discard(place)
+            else:
+                where.setdefault(k, set()).add(place)
+    out: dict = {}
+    for k, places in where.items():
+        envs = sorted({e for _, e in places})
+        if envs:
+            out[k] = envs
     return out
 
 
@@ -287,9 +314,20 @@ def dora(conn, settings: Settings, days: int = 30) -> dict:
         "SELECT * FROM deployments WHERE kind='deployment' AND created >= ? ORDER BY created", (since,))]
     prod = [d for d in prod if is_production(settings, d["environment"])]
     finished = [d for d in prod if d["state"] in DONE_OK | DONE_BAD | {"INACTIVE"}]
-    failed = [d for d in finished if d["state"] in DONE_BAD or d["rollback"]]
+    # A change failed if its deploy failed, or if it went out and was later rolled back.
+    rolled_back = set()
+    for i, d in enumerate(finished):
+        if d["rollback"] and d["state"] in DONE_OK | {"INACTIVE"}:
+            bad = next((x for x in reversed(finished[:i]) if x["repo"] == d["repo"]
+                        and x["environment"] == d["environment"] and x["state"] not in DONE_BAD
+                        and not x["rollback"]), None)
+            if bad:
+                rolled_back.add(bad["id"])
+    is_failed = lambda d: d["state"] in DONE_BAD or d["id"] in rolled_back
+    changes = [d for d in finished if not d["rollback"]]       # a rollback isn't a change of its own
+    failed = [d for d in changes if is_failed(d)]
     lead = []
-    for d in finished:
+    for d in changes:
         if d["state"] in DONE_BAD:
             continue
         for num in d.get("prs") or []:
@@ -299,12 +337,14 @@ def dora(conn, settings: Settings, days: int = 30) -> dict:
     restore = []
     for i, d in enumerate(finished):
         if d in failed:
+            # Restored by the next good deploy, or by a rollback, in the same place.
             nxt = next((x for x in finished[i + 1:] if x["repo"] == d["repo"] and x["environment"] == d["environment"]
-                        and x not in failed), None)
+                        and x["state"] not in DONE_BAD), None)
             if nxt:
                 restore.append((parse_ts(nxt["created"]) - parse_ts(d["created"])).total_seconds() / 3600)
     med = lambda xs: round(sorted(xs)[len(xs) // 2], 1) if xs else None
-    return {"days": days, "deploys": len(finished), "per_week": round(len(finished) / (days / 7), 1),
-            "change_failure_rate": round(len(failed) / len(finished) * 100) if finished else None,
+    return {"days": days, "deploys": len(changes), "per_week": round(len(changes) / (days / 7), 1),
+            "change_failure_rate": round(len(failed) / len(changes) * 100) if changes else None,
             "lead_time_hours": med(lead), "time_to_restore_hours": med(restore),
-            "failed": [{k: d[k] for k in ("repo", "environment", "state", "created", "rollback")} for d in failed]}
+            "failed": [dict({k: d[k] for k in ("repo", "environment", "state", "created")},
+                        rolled_back=d["id"] in rolled_back) for d in failed]}

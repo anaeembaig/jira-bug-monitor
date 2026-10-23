@@ -33,6 +33,8 @@ class DeployGH(FakeGitHub):
         return list(reversed(self.deps))        # newest first, like GitHub
 
     def compare(self, repo, base, head):
+        if self.cmp.get((base, head)) == "error":
+            raise RuntimeError("502 Bad Gateway")
         return self.cmp.get((base, head), {"status": "ahead", "total_commits": 0, "commits": []})
 
     def workflow_runs(self, repo, since):
@@ -128,10 +130,33 @@ def test_deploy_flow_what_shipped_alerts_rollback_and_metrics(env):
     latest = {(e["repo"], e["environment"]): e for e in dep.overview(conn, s)["environments"]}
     assert latest[(REPO, "production")]["id"] == "D5" and latest[(REPO, "production")]["rollback"] == 1
 
+    rb = next(d for d in dep.overview(conn, s)["feed"] if d["id"] == "D5")
+    assert rb["tickets"] == ["HUM-1"]                                             # what the rollback removed
+    assert dep.environments_for_tickets(conn)["HUM-1"] == ["staging"]           # no longer in production
+
     m = dep.dora(conn, s, 30)
-    assert m["deploys"] == 4 and m["change_failure_rate"] == 50                  # D3 failed, D5 rollback
+    # Changes: D0, D3, D4. D3 failed outright; D4 was rolled back by D5.
+    assert m["deploys"] == 3 and m["change_failure_rate"] == 67
+    assert {f["rolled_back"] for f in m["failed"]} == {True, False}
     assert m["lead_time_hours"] == pytest.approx(29.5, abs=0.2)                  # PR merged 30h ago -> D4
-    assert m["time_to_restore_hours"] == pytest.approx(0.5, abs=0.05)            # D3 -> D4
+    assert m["time_to_restore_hours"] == pytest.approx(0.5, abs=0.05)            # D3 -> D4 (0.5h), D4 -> D5 (0.3h)
+
+
+def test_failed_compare_is_retried_then_alerts(env):
+    s, conn, gh, posts = env
+    gh.deps = [deployment("D0", "staging", "a0", 70, [("SUCCESS", 69)])]
+    sync_github(conn, s, gh)
+    dep.sync_deployments(conn, s, gh)
+    gh.deps.append(deployment("D1", "staging", "a1", 1, [("SUCCESS", 0.9)]))
+    gh.cmp[("a0", "a1")] = "error"
+    dep.sync_deployments(conn, s, gh)              # compare fails: tickets unknown, no alert yet
+    row = conn.execute("SELECT tickets FROM deployments WHERE id='D1'").fetchone()
+    assert row["tickets"] is None and kinds(conn) == []
+    gh.cmp[("a0", "a1")] = {"status": "ahead", "total_commits": 1, "commits": [commit("HUM-1 fix (#50)", "anaeem")]}
+    dep.sync_deployments(conn, s, gh)              # retried and now known: one alert
+    assert kinds(conn) == ["deployed"]
+    dep.sync_deployments(conn, s, gh)
+    assert kinds(conn) == ["deployed"]
 
 
 def test_pipeline_progress_and_aliases(env):

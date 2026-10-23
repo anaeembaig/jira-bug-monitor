@@ -1,7 +1,6 @@
 """Engineering insights: cycle time by stage, PR health, bug quality, estimate accuracy, throughput."""
 from __future__ import annotations
 
-import json
 import statistics
 from datetime import datetime, timedelta, timezone
 

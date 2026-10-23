@@ -1,33 +1,39 @@
 # Jira Bug Monitor
 
-A local app that watches Jira bugs and your GitHub pull requests, alerts you when something changes, tracks every status change, and estimates fix times. Any Claude session, in Claude Code (CLI) or Claude Desktop, can query it and log work to the same shared record.
+A local app for the whole team that watches Jira and GitHub, sends Teams alerts when something changes, and shows your tickets, your team's work, time logged, and deployments in one dashboard. Anyone on the team can install it, and any Claude session, in Claude Code (CLI) or Claude Desktop, can query it and log work to the same record.
 
 ## What It Does
 
-- **New bug alerts** on the dashboard, desktop pop-ups, Slack, Teams, and email
-- **Dashboard** with four tabs:
-  - **My Tickets:** everything assigned to you, any type, as a board with all statuses side by side, a full table, or one tab per status (To Do, In Progress, In QA, Done, and so on). Each ticket shows time spent in every status and the total
-  - **Overview:** KPIs and charts for the last 60 days, including weekly created vs. resolved, open bugs over time, and open bugs by priority, status, assignee, and age
-  - **Bugs:** every tracked bug, open or resolved, sorted by an urgency score from 0 to 100
-  - **GitHub:** your pull requests and branches. Each PR shows its dev review outcome, each reviewer's state (approved, changes requested, commented, or pending), comment and unresolved-thread counts, CI checks, labels, and merge state. Click a PR to read the whole conversation, with unresolved code review threads first, and to see its linked Jira tickets and their status
-  - **Activity:** alerts, work in progress, and time logged
-- **Jira and GitHub linking** through the ticket key in a branch name or PR title, such as `humfe-4233-fix`
-- **Full timeline** for each ticket, built from the Jira changelog plus work you log from Claude
-- **Time in status** for each ticket, such as 3 hours in To Do and 6 hours in In Progress
-- **Fix estimates** based on how long similar resolved bugs took
-- **Work records** from any Claude session, stored in one shared database
+The dashboard has these tabs:
+
+| Tab | What it shows |
+|---|---|
+| Overview | KPIs and charts for your bug scope: created vs. resolved, open bugs over time, by priority, status, assignee, and age |
+| My Tickets | Everything assigned to you, any type, as a board, a table, or one tab per status, with time spent in every status |
+| Team | Team board by person and status, active sprint with burnup, release readiness, review queue, QA handoff, and stuck work |
+| Time Log | Your hours per day from Jira worklogs, time tracked from Claude, and what you did on each ticket; the team's hours |
+| Deployments | Every environment: what's running now with step progress, the latest deploy to each, who deployed, what shipped, rollbacks |
+| Insights | Cycle time by stage, PR health, bug quality, estimate accuracy, delivery metrics, a weekly report, and triage help |
+| Bugs | Every tracked bug, open or resolved, with an urgency score and linked PRs |
+| GitHub | Your PRs with reviewers, comments, checks, and merge state; your branches |
+| Activity | Alerts, work in progress, and time tracked from Claude |
+| Settings (gear icon) | Your notifications, quiet hours, summaries, team Teams channels, teammates, and escalation rules |
+
+Click any ticket, PR, or deployment for its full details: timeline, time in each status, fix estimate, linked PRs and branches, Jira comments, and every environment it reached.
+
+Jira tickets link to GitHub automatically when the key is in a branch name, PR title, or commit message, such as `humfe-4233-fix`.
 
 ## How It Fits Together
 
 ```
-            Jira Cloud (REST API, read-only)
+     Jira Cloud and GitHub (read-only, except opt-in worklogs)
                        │  every 5 min
                        ▼
-   ┌──────── python -m bugmonitor run ────────┐
+   ┌────────────── bugmonitor run ────────────┐
    │  poller ─► SQLite (data/monitor.db) ◄─ dashboard (localhost:8765)
    │              ▲          │                 │
    └──────────────┼──────────┼─────────────────┘
-                  │          └─► alerts: desktop · Slack · Teams · email
+                  │          └─► alerts: desktop · Teams (private + channels) · Slack · email
      MCP server (one per Claude session, same database)
         ▲                 ▲
   Claude Code CLI    Claude Desktop
@@ -78,47 +84,69 @@ cd jira-bug-monitor
 
 Tests run automatically on GitHub for every push, on macOS, Windows, and Linux.
 
-## Alert Channels
+## Notifications
 
-Set channels in the `[alerts]` section of `config.toml`. Then run `python -m bugmonitor test-alert` to test them.
+Set everything up in the dashboard under **Settings** (the gear icon), or in the settings file. Changes made in Settings apply right away.
 
-| Channel | Setup |
+### Where They Go
+
+| Destination | What reaches it |
 |---|---|
-| Dashboard | Always on |
-| Desktop | `desktop = true`. On a Mac, allow notifications for **Script Editor** under **System Settings**, then **Notifications** |
-| Slack | Create an [Incoming Webhook](https://api.slack.com/messaging/webhooks) and paste the URL into `slack_webhook` |
-| Teams (private) | In Teams, open **Apps**, then **Workflows**. Choose **Post to a chat when a webhook request is received**, pick **Chat with Flow bot**, and set yourself as the recipient. Paste the URL into `teams_webhook`. Alerts arrive as a private 1:1 chat that only you see |
-| Email | Set `email_enabled = true` and fill in the SMTP settings |
+| Dashboard and desktop pop-ups | Every alert |
+| Your private Teams chat | Your alerts. In Teams: Workflows, then **Post to a chat when a webhook request is received**, **Chat with Flow bot**, you as the recipient |
+| Team Teams channels | Team events for the projects you choose, with the assignee @mentioned. In the channel: Workflows, then **Post to a channel when a webhook request is received** |
+| Slack and email | Your alerts, if configured |
 
-Alerts fire for these events:
+### Events
 
-| Event | Sent to Teams, Slack, and email |
-|---|---|
-| A new bug appears | At or above `external_min_priority` (default High) |
-| A bug's priority goes up | At or above `external_min_priority` |
-| A resolved bug is reopened | At or above `external_min_priority` |
-| A ticket is assigned to you | Always |
-| One of your tickets changes status | Always |
-| Someone requests your review on a PR | When `alerts_to_external = true` |
-| Checks start failing on your PR | When `alerts_to_external = true` |
-| Your PR is approved or gets changes requested | When `alerts_to_external = true` |
-| Your PR is merged | When `alerts_to_external = true` |
-| Someone comments on or reviews your PR | When `alerts_to_external = true` |
-| Your PR gets merge conflicts | When `alerts_to_external = true` |
+| Event | Private chat | Team channels |
+|---|---|---|
+| New bug, priority raised, bug reopened | At or above your lowest priority | At or above the channel's lowest priority |
+| A ticket is assigned to you, or yours changes status | Always | No |
+| You're @mentioned in a Jira comment | Always | No |
+| PR: review requested, comment, approved, changes requested, checks failing, conflicts, merged | Always | No |
+| Your tickets get deployed; a deploy with your tickets fails; rollback | Always | Production deploys, failures, and rollbacks |
+| Stuck work (too long in a status, or a PR waiting on review) | Yours, once | Once per item |
+| Escalation rules, e.g. Critical bug unassigned for 2 hours | If no channel is set | The rule's channel |
+| End-of-day time log reminder | When you're under your daily target | No |
+| Bug Monitor can't sync (3 failures in a row) | Always | No |
 
-The dashboard and desktop pop-ups get every alert. Priorities from both Jira schemes are supported (Highest to Lowest, and Blocker to Trivial). A priority the monitor doesn't recognize is always sent, never dropped.
+### Timing
 
-### Turn Notifications On
+- **Quiet hours and weekends:** non-urgent messages wait, then arrive as one summary. Urgent ones (Blocker, Critical, failed deploys, escalations) still come through unless you turn that off.
+- **Daily summary:** your tickets by status, stuck work, PRs waiting on you, new bugs, and yesterday's hours. The team summary goes to channels marked for it.
+- **Weekly report:** resolved tickets, merged PRs, deploys, and hours, posted on the day you pick.
+
+Teams messages are color coded (red for failures, amber for warnings, green for approvals, merges, and deploys) and have buttons to open the ticket, PR, or dashboard. Both Jira priority schemes are supported (Highest to Lowest, and Blocker to Trivial); a priority the monitor doesn't recognize is always sent.
 
 ```
-.venv/bin/python -m bugmonitor notifications             # see what's on and where it goes
-.venv/bin/python -m bugmonitor notifications --activate  # turn on the recommended set
-.venv/bin/python -m bugmonitor notifications --preview   # send a sample message to Teams
+bugmonitor notifications             # see what's on and where it goes
+bugmonitor notifications --activate  # turn on the recommended set
+bugmonitor notifications --preview   # send a sample message to Teams
 ```
 
-`--activate` edits only the notification settings in `config.toml`, keeps a backup as `config.toml.bak`, and never touches your tokens or webhook URLs. Restart `./start.sh` afterward.
+## Time Log
 
-Teams messages are color coded: red for failing checks and conflicts, amber for priority raises, reopened bugs, and changes requested, and green for approvals and merges. Each one has buttons to open the ticket or PR, and to open the dashboard.
+The **Time Log** tab shows each day, newest first:
+
+- **Hours logged in Jira** per ticket, with worklog comments, against your daily target
+- **Time tracked from Claude** ("I'm starting on HUM-12", "done with HUM-12")
+- **What you did**: status changes, Jira comments, PRs opened, merged, or reviewed
+- **Worked on but not logged**: tickets with activity and no Jira time
+
+Switch to **Team** for everyone's hours per day. To add worklogs from the dashboard or from Claude, set `allow_jira_write = true` under `[timelog]`. It's off by default, and each use is recorded in the audit log.
+
+## Deployments
+
+Bug Monitor reads GitHub deployments for every environment in your repos. GitHub Actions jobs that use `environment:` create these automatically. For each deploy it shows:
+
+- **Who and when:** who deployed, when it started, how long it took, and every status change (queued, in progress, succeeded, failed)
+- **What shipped:** the commits since the previous deploy to that environment, their PRs, and the Jira tickets they mention
+- **Rollbacks:** a deploy of an older version than the one before it, with the tickets it took back out of that environment
+- **Live progress:** deploy pipelines in GitHub Actions, step by step (workflows whose names include "deploy" or "release")
+- **Links:** logs and the environment's URL
+
+Each ticket's details list every environment it reached. A rollback removes the ticket from that environment again, and the QA handoff view uses this to show what's actually testable. Add more repos under `[github] repos`, and rename environments under `[deployments.aliases]`.
 
 ## Connect GitHub
 
@@ -129,13 +157,15 @@ Teams messages are color coded: red for failing checks and conflicts, amber for 
    ```toml
    [github]
    enabled = true
-   token = "ghp_..."
+   token = ""   # blank = credential store (bugmonitor init puts it there)
    orgs = ["tcp-software"]
    jira_prefixes = ["HUMFE", "HUM"]
    ```
 
-4. Run `.venv/bin/python -m bugmonitor check`. It should print `GitHub: connected as <you>`.
-5. Restart `./start.sh`.
+4. Run `bugmonitor check`. It should print `GitHub: connected as <you>`.
+5. Restart `bugmonitor run`.
+
+`bugmonitor init` does all of this for you.
 
 The monitor finds PRs you authored, were asked to review, reviewed, or are assigned to, from the last 60 days. It also finds your branches in the repos you've opened PRs in. To scan more repos, add them to `repos`. Access is read-only.
 
@@ -153,6 +183,10 @@ Ask in plain language from any session:
 - "Which of my PRs are failing checks?" or "What's waiting on my review?"
 - "Has web-schedule#2520 been dev reviewed? Show me the unresolved comments."
 - "How did bug intake compare to fixes over the last 60 days?"
+- "Where has HUM-412 been deployed, and who deployed it?"
+- "What did I work on yesterday, and what haven't I logged?"
+- "What's stuck on the team?" or "How's the sprint going?"
+- "Write my weekly report." or "Draft release notes for HUM 2026.11."
 
 ### Available Tools
 
@@ -173,6 +207,13 @@ Ask in plain language from any session:
 | `get_pull_request` | Shows one PR in full: reviewers, comments, review threads, checks, and linked Jira tickets |
 | `my_branches` | Lists your recent branches with CI status and linked PR |
 | `github_summary` | Shows open PRs by status, reviews waiting on you, and failing checks |
+| `team_board`, `sprint_status`, `release_status` | Team work by person and status, active sprint, unreleased versions |
+| `review_queue`, `qa_handoff`, `stuck_work` | PRs waiting on review, tickets in QA and whether they're testable, stuck items |
+| `my_timesheet`, `team_timesheet` | Hours per day and ticket, with what was done |
+| `log_time_to_jira` | Adds a Jira worklog (only with `allow_jira_write = true`) |
+| `deployments`, `ticket_deployments` | Deploys across environments, and where a ticket has been deployed |
+| `delivery_metrics`, `engineering_insights` | Delivery (DORA) metrics, cycle time, PR health, bug quality, estimate accuracy |
+| `weekly_report`, `draft_release_notes`, `triage_help` | Ready-to-share report, release notes, duplicate and assignment suggestions |
 | `sync_now` | Pulls from Jira and GitHub right away |
 
 Each entry records whether it came from `claude-cli` or `claude-desktop`.
@@ -218,20 +259,21 @@ The Claude tools still work when the poller is off. Data refreshes when you ask 
 ## Commands
 
 ```
-python -m bugmonitor run          # poll Jira and serve the dashboard (leave running)
-python -m bugmonitor sync         # sync once
-python -m bugmonitor check        # test Jira credentials
-python -m bugmonitor dashboard    # dashboard only
-python -m bugmonitor test-alert   # send a test alert
-python -m bugmonitor install-claude  # re-register with Claude Desktop and Claude Code
-python -m bugmonitor doctor       # show version, running copies, and database locks
-python -m bugmonitor notifications --activate --preview  # turn on notifications and test Teams
-python -m pytest -q               # run tests
+bugmonitor init              # guided setup (run again to change answers)
+bugmonitor run               # sync Jira and GitHub and serve the dashboard (leave running)
+bugmonitor sync              # sync once
+bugmonitor check             # test Jira and GitHub logins
+bugmonitor dashboard         # dashboard only
+bugmonitor notifications     # see notifications; --activate, --preview
+bugmonitor test-alert        # send a test alert
+bugmonitor secrets           # where each token comes from; --move to use the credential store
+bugmonitor audit             # changes made from the dashboard or by Claude
+bugmonitor doctor            # version, running copies, database locks, exposure checks
+bugmonitor install-claude    # connect to Claude Desktop and Claude Code again
 ```
 
-## Notes
+In a git checkout, use `.venv/bin/python -m bugmonitor` in place of `bugmonitor`.
 
-- Access to Jira is read-only. The app never changes tickets.
-- Everything stays on your computer. The dashboard only listens on `127.0.0.1`.
-- `config.toml` holds your token. Keep it out of Git. It's already in `.gitignore`.
-- The default scope is every bug your Jira account can see. To narrow it, change `jql`, for example `issuetype = Bug AND project in (HUM, TCP)`.
+## Security
+
+Read-only access to Jira and GitHub (except opt-in worklogs), tokens in your credential store, a dashboard that only listens on this computer, and automatic cleanup of old data. See [SECURITY.md](SECURITY.md).

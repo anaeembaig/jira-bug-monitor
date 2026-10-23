@@ -1,7 +1,6 @@
 """`python -m bugmonitor doctor` — explain what's running and what holds the database."""
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import sqlite3

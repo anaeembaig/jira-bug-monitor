@@ -167,8 +167,12 @@ def in_quiet_hours(notify, now: datetime | None = None) -> bool:
 class Alerter:
     def __init__(self, settings: Settings, conn):
         self.s = settings
-        self.a = settings.alerts
         self.conn = conn
+
+    @property
+    def a(self):
+        # Read live so a settings reload from the dashboard takes effect right away.
+        return self.s.alerts
 
     def _external_ok(self, priority: str | None) -> bool:
         # A priority we can't rank is never silently dropped.
@@ -269,17 +273,29 @@ class Alerter:
             by_target.setdefault(r["target"], []).append(r)
         sent = 0
         for target, items in by_target.items():
-            card = summary_card(f"While notifications were paused: {len(items)} update{'s' * (len(items) != 1)}",
-                                [(i["title"], i["body"], i["url"]) for i in items], self.s.dashboard)
+            title = f"While notifications were paused: {len(items)} update{'s' * (len(items) != 1)}"
+            card = summary_card(title, [(i["title"], i["body"], i["url"]) for i in items], self.s.dashboard)
             if target == "private":
-                ok = bool(self.a.teams_webhook) and self.post_card(self.a.teams_webhook, card)
+                has_target = bool(self.a.teams_webhook or self.a.slack_webhook
+                                  or (self.a.email_enabled and self.a.email_to))
+                ok = False
+                if self.a.teams_webhook:
+                    ok = self.post_card(self.a.teams_webhook, card) or ok
+                lines = "\n".join(f"- {i['title']}: {i['body']}" + (f" ({i['url']})" if i["url"] else "")
+                                   for i in items)
+                if self.a.slack_webhook:
+                    ok = self._post(self.a.slack_webhook, {"text": f"{title}\n{lines}"}, "Slack") or ok
+                if self.a.email_enabled and self.a.email_to:
+                    ok = self._email(title, lines, None) or ok
             else:
                 r = self.s.route(target.split(":", 1)[1])
-                ok = bool(r and r.webhook) and self.post_card(r.webhook, card)
-            if ok or not (target == "private" and self.a.teams_webhook):
+                has_target = bool(r and r.webhook)
+                ok = has_target and self.post_card(r.webhook, card)
+            # Keep held messages until they're delivered; drop them only if their destination is gone.
+            if ok or not has_target:
                 self.conn.execute(f"DELETE FROM outbox WHERE id IN ({','.join('?' * len(items))})",
                                   [i["id"] for i in items])
-                sent += ok
+                sent += int(ok)
         self.conn.commit()
         return sent
 
@@ -320,7 +336,7 @@ class Alerter:
         msg["Subject"] = f"[Bug Monitor] {title}"
         msg["From"] = self.a.email_from or self.a.smtp_user
         msg["To"] = ", ".join(self.a.email_to)
-        msg.set_content(
+        msg.set_content(body + "\n" if issue is None else
             f"{body}\n\nStatus: {issue.get('status')}\n"
             f"Assignee: {issue.get('assignee') or 'Unassigned'}\n{issue.get('url')}\n"
         )

@@ -442,7 +442,7 @@ function hbars(el, data, {total} = {}) {
   const max = Math.max(...data.map(d => d.n), 1);
   const sum = total ?? data.reduce((a, d) => a + d.n, 0);
   el.innerHTML = data.map(d => `
-    <div class="hbar" data-tip="<b>${esc(d.label)}</b><br>${d.n} bug${d.n === 1 ? "" : "s"} · ${Math.round(d.n / sum * 100)}%">
+    <div class="hbar" data-tip="${esc(`<b>${esc(d.label)}</b><br>${d.n} bug${d.n === 1 ? "" : "s"} · ${Math.round(d.n / sum * 100)}%`)}">
       <span class="lab" title="${esc(d.label)}">${esc(d.label)}</span>
       <span class="track">${d.n ? `<span class="fill" style="width:${d.n / max * 100}%"></span>` : ""}</span>
       <span class="v num">${d.n}</span></div>`).join("");

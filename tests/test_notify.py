@@ -121,7 +121,7 @@ def test_stuck_reminders_once_and_digests(env):
     early = datetime(2026, 10, 22, 9, 0)
     assert jobs.digests(conn, s, Alerter(s, conn), early) == []
     at = datetime(2026, 10, 22, 9, 31)
-    assert jobs.digests(conn, s, Alerter(s, conn), at) == ["personal", "team"]
+    assert jobs.digests(conn, s, Alerter(s, conn), at) == ["personal", "team:web"]
     texts = [b["text"] for _, p in posts for b in p["attachments"][0]["content"]["body"]]
     assert any("Your tickets" in x for x in texts) and any("Work in progress" in x for x in texts)
     assert any("Stuck" in x for x in texts)

@@ -156,8 +156,8 @@ class _Ctx:
             return d["assignee_id"] == self.me_id
         return bool(self.me_name) and d.get("assignee") == self.me_name
 
-    def alert(self, d, kind, detail="", external=None):
-        self.alerter.raise_alert(d, kind, detail, external=external)
+    def alert(self, d, kind, detail="", external=None, personal=True):
+        self.alerter.raise_alert(d, kind, detail, external=external, personal=personal)
         self.stats["alerts"] += 1
 
 
@@ -284,9 +284,13 @@ def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
     if d["status"] and d["status_category"]:
         ctx.cats[d["status"]] = d["status_category"]
     old = row_to_dict(conn.execute("SELECT * FROM issues WHERE key=?", (d["key"],)).fetchone())
+    entered_bugs = scope == "bugs" and old is not None and not old.get("in_bugs")
     if old and old["updated"] == d["updated"]:
         # Unchanged, but make sure it's flagged for this scope.
         conn.execute(f"UPDATE issues SET in_{scope}=1 WHERE key=?", (d["key"],))
+        conn.commit()
+        if entered_bugs and not quiet:
+            _new_bug_alerts(ctx, d)
         return
 
     # Network first, writes second: never hold the database lock while waiting on Jira.
@@ -313,21 +317,39 @@ def _process(ctx: _Ctx, raw: dict, scope: str, quiet: bool) -> None:
     if quiet:
         return
     open_now = d["status_category"] != "done"
-    if old is None:
-        if scope == "bugs" and a.new_bug and open_now:
-            ctx.alert(d, "new_bug", "assigned to you" if ctx.is_me(d) else "")
+    if old is None or entered_bugs:
+        if scope == "bugs":
+            _new_bug_alerts(ctx, d)
         elif scope == "mine" and a.assigned_to_me and open_now:
             ctx.alert(d, "assigned_to_me", d.get("issuetype") or "", external=True)
-        return
+        if old is None:
+            return
+    fired = False
     if old.get("in_bugs") and a.priority_raised and \
             s.priority_rank(d["priority"]) > s.priority_rank(old["priority"]):
         ctx.alert(d, "priority_raised", f"{old['priority']} → {d['priority']}")
     if old.get("in_bugs") and a.reopened and old["status_category"] == "done" and open_now:
         ctx.alert(d, "reopened", f"now {d['status']}")
+        fired = True
     if a.assigned_to_me and ctx.is_me(d) and not ctx.is_me(old) and open_now:
-        ctx.alert(d, "assigned_to_me", f"previously {old['assignee'] or 'unassigned'}", external=True)
-    elif a.my_status_changes and ctx.is_me(d) and old["status"] != d["status"]:
+        if not entered_bugs:  # _new_bug_alerts already covered it
+            ctx.alert(d, "assigned_to_me", f"previously {old['assignee'] or 'unassigned'}", external=True)
+        fired = True
+    if not fired and a.my_status_changes and ctx.is_me(d) and old["status"] != d["status"]:
         ctx.alert(d, "my_status", f"{old['status']} → {d['status']}", external=True)
+
+
+def _new_bug_alerts(ctx: _Ctx, d: dict) -> None:
+    """A bug that just came into view. If it's yours, you get one "assigned to you" message;
+    team channels still get the new-bug alert."""
+    a = ctx.s.alerts
+    if d["status_category"] == "done":
+        return
+    mine = ctx.is_me(d)
+    if a.new_bug:
+        ctx.alert(d, "new_bug", "assigned to you" if mine else "", personal=not (mine and a.assigned_to_me))
+    if mine and a.assigned_to_me:
+        ctx.alert(d, "assigned_to_me", d.get("issuetype") or "Bug", external=True)
 
 
 def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter | None) -> dict:
@@ -346,7 +368,11 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
     set_state(conn, "sync_progress", "0")
     conn.commit()
 
-    if first_sync:
+    today = datetime.now().date().isoformat()
+    # Once a day, re-read the whole bug scope so tickets that moved out of it (another project,
+    # no longer a Bug) leave the dashboard. Incremental syncs can't see those.
+    bugs_full = first_sync or get_state(conn, "bugs_full_date") != today
+    if bugs_full:
         jql = (f"({base}) AND (statusCategory != Done OR updated >= -{settings.jira.backfill_days}d)"
                " ORDER BY updated ASC")
     else:
@@ -418,10 +444,14 @@ def _sync_locked(conn, settings: Settings, client: JiraClient, alerter: Alerter 
         log.warning("Worklog sync failed: %s", e)
 
     # ---- keep the store in scope (your own tickets are kept while they're yours)
-    if scope_changed:
-        for r in conn.execute("SELECT key FROM issues WHERE in_bugs=1").fetchall():
-            if r["key"] not in seen:
+    if bugs_full:
+        backfill = started - timedelta(days=settings.jira.backfill_days)
+        for r in conn.execute("SELECT key, status_category, updated FROM issues WHERE in_bugs=1").fetchall():
+            # Done tickets older than the backfill window aren't in the full query; keep those.
+            old_done = r["status_category"] == "done" and (parse_ts(r["updated"]) or started) < backfill
+            if r["key"] not in seen and (scope_changed or not old_done):
                 conn.execute("UPDATE issues SET in_bugs=0 WHERE key=?", (r["key"],))
+        set_state(conn, "bugs_full_date", today)
     if cutoff:
         for r in conn.execute("SELECT key, created FROM issues WHERE in_bugs=1").fetchall():
             if (parse_ts(r["created"]) or started) < cutoff:
@@ -452,6 +482,16 @@ def sync_github_safe(conn, settings: Settings, alerter: Alerter | None = None) -
     if not settings.github.enabled:
         return None
     from .github_client import GitHubClient, resolve_token
+    lock = FileLock(settings.db_path.parent / "github.lock")
+    if not lock.acquire():
+        return {"skipped": True, "reason": f"Another GitHub sync is already running (pid {lock.holder_pid()})."}
+    try:
+        return _sync_github(conn, settings, alerter, GitHubClient, resolve_token)
+    finally:
+        lock.release()
+
+
+def _sync_github(conn, settings, alerter, GitHubClient, resolve_token):
     try:
         from .deployments import sync_deployments
         from .github_sync import sync_github

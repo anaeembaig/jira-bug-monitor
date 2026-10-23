@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import tomllib
 from pathlib import Path
 
 from .config import Settings, config_path as resolve_config, load_settings
@@ -40,41 +38,8 @@ def _toml_value(v) -> str:
 def set_config_values(path: Path, updates: dict[str, dict], only_if_missing: set[str] = frozenset()) -> list[str]:
     """Edit config.toml in place, keeping comments and everything else. Returns changes made.
     Keys named in only_if_missing (as "section.key") are added but never overwritten."""
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    lines = text.splitlines()
-    changes = []
-    for section, kv in updates.items():
-        start = next((i for i, l in enumerate(lines) if l.strip() == f"[{section}]"), None)
-        if start is None:
-            lines += ["", f"[{section}]"]
-            start = len(lines) - 1
-        end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
-        for key, value in kv.items():
-            new_line = f"{key} = {_toml_value(value)}"
-            idx = next((i for i in range(start + 1, end)
-                        if re.match(rf"\s*{re.escape(key)}\s*=", lines[i])), None)
-            if idx is None:
-                insert_at = end
-                while insert_at - 1 > start and not lines[insert_at - 1].strip():
-                    insert_at -= 1
-                lines.insert(insert_at, new_line)
-                end += 1
-                changes.append(f"[{section}] added {new_line}")
-            elif f"{section}.{key}" not in only_if_missing:
-                try:
-                    current = tomllib.loads(lines[idx]).get(key)
-                except tomllib.TOMLDecodeError:
-                    current = object()  # unreadable line: replace it
-                if current != value:
-                    lines[idx] = new_line
-                    changes.append(f"[{section}] set {new_line}")
-    new_text = "\n".join(lines) + "\n"
-    tomllib.loads(new_text)  # refuse to write anything that isn't valid TOML
-    if changes:
-        if path.exists():
-            shutil.copy2(path, path.with_suffix(".toml.bak"))
-        path.write_text(new_text, encoding="utf-8")
-    return changes
+    from .tomledit import set_values
+    return set_values(Path(path), updates, only_if_missing)
 
 
 def recommended(settings: Settings) -> tuple[dict, set]:

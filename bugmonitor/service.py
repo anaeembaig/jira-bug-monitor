@@ -287,7 +287,6 @@ def overview(conn, settings=None, days: int = 60) -> dict:
     res_hours.sort()
     median_h = res_hours[len(res_hours) // 2] if res_hours else None
 
-    prio_order = settings.priority_order if settings else []
     seven = now - timedelta(days=7)
     return {
         "days": days,

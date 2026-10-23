@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from . import service, team
-from .alerts import Alerter, in_quiet_hours, summary_card
+from .alerts import Alerter, in_quiet_hours
 from .analytics import parse_ts
 from .config import Settings
 from .db import get_state, row_to_dict, set_state
@@ -118,19 +118,26 @@ def digests(conn, settings: Settings, alerter: Alerter, now: datetime | None = N
             set_state(conn, "digest_personal", today)
             sent.append("personal")
     targets = [r for r in settings.routes if r.digest and r.webhook]
-    if settings.notify.digest_team and settings.team.jql and targets and get_state(conn, "digest_team") != today:
+    # State per destination, so one failing channel doesn't make the others post twice.
+    due_team = [r for r in targets if get_state(conn, f"digest_team:{r.name}") != today]
+    if settings.notify.digest_team and settings.team.jql and due_team:
         card = team_digest(conn, settings)
-        if all([alerter.post_card(r.webhook, card) for r in targets]):
-            set_state(conn, "digest_team", today)
-            sent.append("team")
+        for r in due_team:
+            if alerter.post_card(r.webhook, card):
+                set_state(conn, f"digest_team:{r.name}", today)
+                sent.append(f"team:{r.name}")
     day = settings.notify.weekly_report_day.lower()
-    if day and DAYS[now.weekday()] == day and get_state(conn, "weekly_report") != today:
-        from .reports import weekly_card
-        card = weekly_card(conn, settings)
-        dests = [r.webhook for r in targets] or ([settings.alerts.teams_webhook] if settings.alerts.teams_webhook else [])
-        if dests and all([alerter.post_card(w, card) for w in dests]):
-            set_state(conn, "weekly_report", today)
-            sent.append("weekly")
+    if day and DAYS[now.weekday()] == day:
+        dests = [(f"route:{r.name}", r.webhook) for r in targets] or (
+            [("private", settings.alerts.teams_webhook)] if settings.alerts.teams_webhook else [])
+        dests = [(k, w) for k, w in dests if get_state(conn, f"weekly_report:{k}") != today]
+        if dests:
+            from .reports import weekly_card
+            card = weekly_card(conn, settings)
+            for k, w in dests:
+                if alerter.post_card(w, card):
+                    set_state(conn, f"weekly_report:{k}", today)
+                    sent.append(f"weekly:{k}")
     conn.commit()
     return sent
 

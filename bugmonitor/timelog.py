@@ -53,6 +53,13 @@ def sync_worklogs(conn, settings: Settings, client, me_id: str = "") -> dict:
     for q in queries:
         for raw in client.search(q):
             keys[raw["key"]] = raw
+    # Deleting the last worklog on a ticket takes it out of the searches above, so once an hour
+    # re-check every ticket we hold worklogs for in the window.
+    hour = started.strftime("%Y-%m-%dT%H")
+    if get_state(conn, "worklogs_recheck_hour") != hour:
+        for r in conn.execute("SELECT DISTINCT key FROM worklogs WHERE started >= ?", (since.isoformat(),)):
+            keys.setdefault(r["key"], None)
+        set_state(conn, "worklogs_recheck_hour", hour)
     stored = 0
     for key, raw in keys.items():
         try:
@@ -60,14 +67,15 @@ def sync_worklogs(conn, settings: Settings, client, me_id: str = "") -> dict:
         except Exception as e:
             log.warning("Worklogs for %s failed: %s", key, e)
             continue
-        f = raw.get("fields", {})
+        f = (raw or {}).get("fields", {})
         status = f.get("status") or {}
-        conn.execute(
-            "INSERT OR REPLACE INTO ticket_refs(key, summary, status, status_category, issuetype, project, priority, url) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (key, f.get("summary"), status.get("name"), (status.get("statusCategory") or {}).get("key"),
-             (f.get("issuetype") or {}).get("name"), (f.get("project") or {}).get("key"),
-             (f.get("priority") or {}).get("name"), client.browse_url(key)))
+        if raw is not None:
+            conn.execute(
+                "INSERT OR REPLACE INTO ticket_refs(key, summary, status, status_category, issuetype, project, priority, url) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (key, f.get("summary"), status.get("name"), (status.get("statusCategory") or {}).get("key"),
+                 (f.get("issuetype") or {}).get("name"), (f.get("project") or {}).get("key"),
+                 (f.get("priority") or {}).get("name"), client.browse_url(key)))
         ids = set()
         for w in wls:
             a = w.get("author") or {}

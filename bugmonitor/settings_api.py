@@ -9,7 +9,7 @@ from pathlib import Path
 from . import vault
 from .config import Settings, load_settings
 from .db import now_iso
-from .notify_setup import _toml_value, set_config_values
+from .notify_setup import set_config_values
 
 # Simple settings the dashboard may change: section -> {key: type}
 EDITABLE = {
@@ -73,25 +73,8 @@ def _validate(section: str, key: str, value):
 
 
 def _replace_table_array(path: Path, name: str, items: list[dict]) -> None:
-    """Rewrite every [[name]] block (keeps everything else in the file, including comments)."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    out, skipping = [], False
-    for line in lines:
-        st = line.strip()
-        if st == f"[[{name}]]":
-            skipping = True
-            continue
-        if skipping and st.startswith("[") and st != f"[[{name}]]":
-            skipping = False
-        if not skipping:
-            out.append(line)
-    while out and not out[-1].strip():
-        out.pop()
-    for item in items:
-        out += ["", f"[[{name}]]"] + [f"{k} = {_toml_value(v)}" for k, v in item.items() if v is not None]
-    text = "\n".join(out) + "\n"
-    tomllib.loads(text)  # never write invalid TOML
-    path.write_text(text, encoding="utf-8")
+    from .tomledit import set_table_array
+    set_table_array(path, name, items)
 
 
 def save(conn, settings: Settings, body: dict) -> dict:
@@ -160,7 +143,7 @@ def save(conn, settings: Settings, body: dict) -> dict:
                     "route": (e.get("route") or "").strip()} for e in body["escalations"]]
             _replace_table_array(path, "escalations", esc)
             changed.append(f"{len(esc)} escalation rule(s)")
-    except (ValueError, TypeError, tomllib.TOMLDecodeError) as e:
+    except (ValueError, TypeError, AssertionError, tomllib.TOMLDecodeError) as e:
         path.write_text(original, encoding="utf-8")   # all or nothing
         return {"error": str(e)}
 

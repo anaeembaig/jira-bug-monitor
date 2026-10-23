@@ -12,6 +12,7 @@ dependencies = [
     "requests>=2.31",
     "mcp>=1.12,<2",
     "keyring>=24",
+    "tomlkit>=0.12",
     "plyer>=2.1; platform_system == 'Windows'",
 ]
 

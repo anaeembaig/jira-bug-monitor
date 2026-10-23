@@ -98,7 +98,7 @@ escape_labels = ["production", "prod", "customer", "escalation"]
 # name = "front-end"
 # webhook = "https://..."
 # projects = ["PROJ"]
-# events = ["new_bug", "priority_raised", "reopened", "escalation", "stuck"]
+# events = ["new_bug", "priority_raised", "reopened", "escalation", "stuck", "deployment"]
 # min_priority = "Major"
 # digest = true
 # mention_assignee = true
@@ -111,12 +111,39 @@ escape_labels = ["production", "prod", "customer", "escalation"]
 # open_hours = 0
 # route = "front-end"     # blank = your private chat
 
+# Daily time log: Jira worklogs, time tracked from Claude, and what you did on each ticket.
+[timelog]
+enabled = true
+days = 14
+daily_target_hours = 8
+workdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+reminder_time = "17:30"   # end-of-day Teams reminder when you're under target ("" = off)
+recap_in_digest = true
+team = true               # teammates' hours on team tickets
+allow_jira_write = false  # let the dashboard and Claude add worklogs to Jira for you
+
+# Deployments from GitHub: every environment, who deployed, progress, and what shipped.
+[deployments]
+enabled = true
+days = 30
+alert_my_tickets = true   # your tickets reach an environment
+alert_failures = true     # a deploy with your tickets fails, or any production deploy fails
+alert_rollbacks = true
+workflow_keywords = ["deploy", "release"]   # Actions workflows to track live
+
+[deployments.aliases]
+# "prod-us-east-1" = "Production"
+
 [dashboard]
-host = "127.0.0.1"        # local only
+host = "127.0.0.1"        # this computer only
 port = 8765
+allow_network = false     # the dashboard has no login; keep this false
 
 [storage]
 db_path = "data/monitor.db"   # relative to this file
+keep_alerts_days = 90
+keep_audit_days = 365
+keep_work_log_days = 365
 
 [priority]
 # Most urgent first. Covers both Jira schemes; names not listed fall back to this built-in order.
